@@ -48,18 +48,33 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     
     # Store state
     with get_session() as session:
+        now_utc = datetime.now(timezone.utc)
+        expires_at = now_utc + timedelta(minutes=15)
+        
+        logger.info(f"OAuth state created:")
+        logger.info(f"  created_at: {now_utc}")
+        logger.info(f"  expires_at: {expires_at}")
+        logger.info(f"  lifetime_seconds: {(expires_at - now_utc).total_seconds()}")
+        
         oauth_state = OAuthState(
             state=state,
             telegram_id=telegram_id,
             code_verifier=verifier,
-            expires_at=datetime.now(timezone.utc) + timedelta(minutes=15)
+            expires_at=expires_at
         )
         session.add(oauth_state)
         session.commit()
         
     # Build authorization URL
-    client_id = os.getenv("SWIGGY_CLIENT_ID", "")
-    redirect_uri = os.getenv("SWIGGY_REDIRECT_URI", "http://localhost:8000/api/auth/swiggy/callback")
+    from .dcr import get_or_register_client
+    try:
+        client_id = await get_or_register_client()
+    except Exception as e:
+        logger.exception("Failed to get or register Swiggy OAuth client")
+        await update.message.reply_text("❌ Sorry, there was an internal error setting up the connection. Please try again later.")
+        return
+
+    redirect_uri = os.getenv("SWIGGY_REDIRECT_URI", "http://127.0.0.1:8000/api/auth/swiggy/callback")
     
     # Official Swiggy auth endpoint
     auth_base_url = "https://mcp.swiggy.com/auth/authorize"
@@ -70,7 +85,8 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         "redirect_uri": redirect_uri,
         "state": state,
         "code_challenge": challenge,
-        "code_challenge_method": "S256"
+        "code_challenge_method": "S256",
+        "scope": "mcp:tools"
     }
     
     auth_url = f"{auth_base_url}?{urllib.parse.urlencode(params)}"

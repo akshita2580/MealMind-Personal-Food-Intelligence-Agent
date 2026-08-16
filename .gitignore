@@ -119,3 +119,6 @@ coverage/
 # User-specific config files
 config/user.json
 config/personal.json
+
+# OAuth DCR registration
+.swiggy_oauth_client.json

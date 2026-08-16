@@ -616,6 +616,15 @@ SWIGGY_REDIRECT_URI=http://localhost:8000/api/auth/swiggy/callback
 > **Important Limitation:**
 > OAuth authentication does NOT currently make the existing cookie-based `sync_orders` work. OAuth is used for account linking, but you must still provide cookies to the `sync_orders` endpoint to sync order history.
 
+### Dynamic Client Registration (DCR)
+
+Swiggy OAuth uses Dynamic Client Registration (DCR). When a user initiates a connection:
+- DCR is performed automatically using the official Swiggy endpoint.
+- The registration is saved locally to `.swiggy_oauth_client.json`.
+- The `SWIGGY_REDIRECT_URI` environment variable controls the registered redirect URI. If it changes, the application automatically re-registers.
+- **Manual configuration of `SWIGGY_CLIENT_ID` and `SWIGGY_CLIENT_SECRET` is no longer required**. Since the official DCR endpoint uses a public-client configuration (`token_endpoint_auth_method=none`), no client secret is needed.
+- If you need to force a new registration, simply delete the `.swiggy_oauth_client.json` file and restart the server.
+
 
 ### Project Structure
 

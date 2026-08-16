@@ -256,10 +256,24 @@ def get_insights(
 async def swiggy_oauth_callback(
     request: Request,
     state: str = Query(..., description="OAuth State"),
-    code: str = Query(..., description="Authorization Code"),
+    code: str | None = Query(default=None, description="Authorization Code"),
+    error: str | None = Query(default=None, description="Error"),
+    error_description: str | None = Query(default=None, description="Error description"),
     session: Session = Depends(_session),
 ) -> HTMLResponse:
     """Handle Swiggy OAuth callback."""
+    
+    logger.info(f"OAuth callback reached; code_present={bool(code)}; state_present={bool(state)}; error_present={bool(error)}")
+    logger.info(f"Callback request host: {request.url.hostname}; path: {request.url.path}")
+    
+    if error:
+        logger.error(f"OAuth error received: {error} - {error_description}")
+        return HTMLResponse(f"<h1>❌ Swiggy connection failed: {error} - {error_description}</h1>", status_code=400)
+        
+    if not code:
+        logger.error("OAuth callback missing code")
+        return HTMLResponse("<h1>❌ Swiggy connection failed: Missing code.</h1>", status_code=400)
+
     from .models import User, SwiggyConnection, OAuthState
     
     # 1. Validate State
@@ -278,16 +292,33 @@ async def swiggy_oauth_callback(
         return HTMLResponse("<h1>❌ Swiggy connection failed: Invalid or missing state.</h1>", status_code=400)
     
     try:
-        if oauth_state.expires_at.replace(tzinfo=timezone.utc) < datetime.now(timezone.utc):
+        now_utc = datetime.now(timezone.utc)
+        expires_at_naive = oauth_state.expires_at
+        expires_at_aware = oauth_state.expires_at.replace(tzinfo=timezone.utc) if oauth_state.expires_at.tzinfo is None else oauth_state.expires_at
+        
+        logger.info(f"OAuth state check:")
+        logger.info(f"  created_at: {oauth_state.created_at}")
+        logger.info(f"  expires_at (raw): {oauth_state.expires_at} (tzinfo: {oauth_state.expires_at.tzinfo})")
+        logger.info(f"  expires_at (aware): {expires_at_aware}")
+        logger.info(f"  now (UTC): {now_utc}")
+        logger.info(f"  remaining seconds: {(expires_at_aware - now_utc).total_seconds()}")
+        logger.info(f"  is_expired: {expires_at_aware < now_utc}")
+
+        if expires_at_aware < now_utc:
             return HTMLResponse("<h1>❌ Swiggy connection failed: State expired. Please try again.</h1>", status_code=400)
         
         telegram_id = oauth_state.telegram_id
         code_verifier = oauth_state.code_verifier
         
         # 2. Exchange Code for Token
-        client_id = os.getenv("SWIGGY_CLIENT_ID")
-        client_secret = os.getenv("SWIGGY_CLIENT_SECRET", "")
-        redirect_uri = os.getenv("SWIGGY_REDIRECT_URI", "http://localhost:8000/api/auth/swiggy/callback")
+        from .dcr import get_or_register_client
+        try:
+            client_id = await get_or_register_client()
+        except Exception:
+            logger.exception("Failed to get or register Swiggy OAuth client during callback")
+            return HTMLResponse("<h1>❌ Swiggy connection failed: Internal client error.</h1>", status_code=500)
+            
+        redirect_uri = os.getenv("SWIGGY_REDIRECT_URI", "http://127.0.0.1:8000/api/auth/swiggy/callback")
         
         token_url = "https://mcp.swiggy.com/auth/token"
         
@@ -298,8 +329,6 @@ async def swiggy_oauth_callback(
             "redirect_uri": redirect_uri,
             "code_verifier": code_verifier,
         }
-        if client_secret:
-            data["client_secret"] = client_secret
             
         async with httpx.AsyncClient() as client:
             try:
