@@ -9,9 +9,14 @@ stay in sync with the MCP tool signatures.
 """
 
 from __future__ import annotations
+import logging
+import os
+import httpx
+from datetime import datetime, timedelta, timezone
 from typing import Generator
-from fastapi import APIRouter, Depends, Query
-from sqlmodel import Session
+from fastapi import APIRouter, Depends, Query, Request
+from fastapi.responses import HTMLResponse
+from sqlmodel import Session, select
 from . import fetcher, repository
 from .database import get_session
 from .models import (
@@ -22,6 +27,9 @@ from .models import (
     SyncResult,
     InsightsListResponse,
 )
+from .security import encrypt_token
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api", tags=["Swiggy Orders"])
 
@@ -238,3 +246,121 @@ def get_insights(
         end_date=end_date,
         period=period,
     )
+
+
+# ---------------------------------------------------------------------------
+# GET /api/auth/swiggy/callback
+# ---------------------------------------------------------------------------
+
+@router.get("/auth/swiggy/callback", summary="OAuth Callback for Swiggy", tags=["Authentication"], response_class=HTMLResponse)
+async def swiggy_oauth_callback(
+    request: Request,
+    state: str = Query(..., description="OAuth State"),
+    code: str = Query(..., description="Authorization Code"),
+    session: Session = Depends(_session),
+) -> HTMLResponse:
+    """Handle Swiggy OAuth callback."""
+    from .models import User, SwiggyConnection, OAuthState
+    
+    # 1. Validate State
+    oauth_state = session.exec(select(OAuthState).where(OAuthState.state == state)).first()
+    
+    # Opportunistic cleanup of stale states
+    now = datetime.now(timezone.utc)
+    expired_states = session.exec(select(OAuthState).where(OAuthState.expires_at < now)).all()
+    for st in expired_states:
+        if not oauth_state or st.state != oauth_state.state:
+            session.delete(st)
+    if expired_states:
+        session.commit()
+
+    if not oauth_state:
+        return HTMLResponse("<h1>❌ Swiggy connection failed: Invalid or missing state.</h1>", status_code=400)
+    
+    try:
+        if oauth_state.expires_at.replace(tzinfo=timezone.utc) < datetime.now(timezone.utc):
+            return HTMLResponse("<h1>❌ Swiggy connection failed: State expired. Please try again.</h1>", status_code=400)
+        
+        telegram_id = oauth_state.telegram_id
+        code_verifier = oauth_state.code_verifier
+        
+        # 2. Exchange Code for Token
+        client_id = os.getenv("SWIGGY_CLIENT_ID")
+        client_secret = os.getenv("SWIGGY_CLIENT_SECRET", "")
+        redirect_uri = os.getenv("SWIGGY_REDIRECT_URI", "http://localhost:8000/api/auth/swiggy/callback")
+        
+        token_url = "https://mcp.swiggy.com/auth/token"
+        
+        data = {
+            "grant_type": "authorization_code",
+            "client_id": client_id,
+            "code": code,
+            "redirect_uri": redirect_uri,
+            "code_verifier": code_verifier,
+        }
+        if client_secret:
+            data["client_secret"] = client_secret
+            
+        async with httpx.AsyncClient() as client:
+            try:
+                resp = await client.post(token_url, data=data, timeout=10.0)
+                if resp.status_code != 200:
+                    logger.error("Swiggy token exchange failed: %s %s", resp.status_code, resp.text)
+                    return HTMLResponse("<h1>❌ Swiggy connection failed: Token exchange failed.</h1>", status_code=400)
+                
+                token_data = resp.json()
+                access_token = token_data.get("access_token")
+                expires_in = token_data.get("expires_in", 3600)
+                
+                if not access_token:
+                    return HTMLResponse("<h1>❌ Swiggy connection failed: Missing access token in response.</h1>", status_code=400)
+                    
+            except Exception:
+                logger.exception("Exception during Swiggy token exchange")
+                return HTMLResponse("<h1>❌ Swiggy connection failed: Network error during token exchange.</h1>", status_code=500)
+        
+        # 3. Create or Update User & Connection
+        
+        user = session.exec(select(User).where(User.telegram_id == telegram_id)).first()
+        if not user:
+            user = User(telegram_id=telegram_id)
+            session.add(user)
+            session.commit()
+            session.refresh(user)
+            
+        conn = session.exec(select(SwiggyConnection).where(SwiggyConnection.user_id == user.id)).first()
+        expires_at = datetime.now(timezone.utc) + timedelta(seconds=int(expires_in))
+        
+        if not conn:
+            conn = SwiggyConnection(
+                user_id=user.id,
+                status="CONNECTED",
+                access_token=encrypt_token(access_token),
+                expires_at=expires_at
+            )
+            session.add(conn)
+        else:
+            conn.status = "CONNECTED"
+            conn.access_token = encrypt_token(access_token)
+            conn.expires_at = expires_at
+            conn.updated_at = datetime.now(timezone.utc)
+            session.add(conn)
+    
+        session.commit()
+    finally:
+        # 4. Always consume the state
+        session.delete(oauth_state)
+        session.commit()
+
+    # 4. Show success page
+    html = """
+    <html>
+        <head><title>Swiggy Connected</title></head>
+        <body style="font-family: sans-serif; text-align: center; padding: 50px;">
+            <h1 style="color: #4CAF50;">✅ Swiggy connected successfully!</h1>
+            <p>Your FoodIQ account is now connected to Swiggy.</p>
+            <p>You can close this window and return to Telegram.</p>
+        </body>
+    </html>
+    """
+    return HTMLResponse(html)

@@ -29,6 +29,7 @@ from .api import router as api_router
 from .database import create_db_and_tables
 from .error_handlers import register_error_handlers
 from .mcp_server import mcp
+from .telegram_bot import build_telegram_app
 
 # ---------------------------------------------------------------------------
 # Load environment variables from .env file (requirement 13.3)
@@ -58,8 +59,21 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """Lifecycle hook for FastAPI."""
     # Ensure database and tables exist before handling requests
     create_db_and_tables()
+    
+    # Start Telegram bot polling
+    tg_app = build_telegram_app()
+    if tg_app:
+        await tg_app.initialize()
+        await tg_app.start()
+        await tg_app.updater.start_polling(drop_pending_updates=True)
+        
     yield
-    # Any teardown code would go here
+    
+    # Teardown Telegram bot
+    if tg_app:
+        await tg_app.updater.stop()
+        await tg_app.stop()
+        await tg_app.shutdown()
 
 
 app = FastAPI(

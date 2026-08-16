@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from datetime import date
-from pathlib import Path
 
 import pytest
 from sqlmodel import SQLModel, Session, create_engine
@@ -16,14 +15,19 @@ from src.services.insight_engine import (
 
 
 @pytest.fixture
-def session(tmp_path: Path):
+def session():
+    from sqlalchemy.pool import StaticPool
     engine = create_engine(
-        f"sqlite:///{tmp_path / 'insights.db'}",
+        "sqlite:///:memory:",
         connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
     )
     SQLModel.metadata.create_all(engine)
-    with Session(engine) as db_session:
-        yield db_session
+    try:
+        with Session(engine) as db_session:
+            yield db_session
+    finally:
+        engine.dispose()
 
 
 def _raw_order(

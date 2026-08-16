@@ -38,22 +38,22 @@ class Colors:
 
 def print_test(name: str) -> None:
     """Print test name."""
-    print(f"\n{Colors.BLUE}{Colors.BOLD}▶ {name}{Colors.RESET}")
+    print(f"\n{Colors.BLUE}{Colors.BOLD}> {name}{Colors.RESET}")
 
 
 def print_success(msg: str) -> None:
     """Print success message."""
-    print(f"{Colors.GREEN}✓ {msg}{Colors.RESET}")
+    print(f"{Colors.GREEN}v {msg}{Colors.RESET}")
 
 
 def print_error(msg: str) -> None:
     """Print error message."""
-    print(f"{Colors.RED}✗ {msg}{Colors.RESET}")
+    print(f"{Colors.RED}x {msg}{Colors.RESET}")
 
 
 def print_warning(msg: str) -> None:
     """Print warning message."""
-    print(f"{Colors.YELLOW}⚠ {msg}{Colors.RESET}")
+    print(f"{Colors.YELLOW}! {msg}{Colors.RESET}")
 
 
 def print_info(msg: str) -> None:
@@ -65,7 +65,7 @@ class IntegrationTester:
     """Integration test suite for Swiggy MCP server."""
 
     def __init__(self):
-        self.base_dir = Path(__file__).parent.absolute()
+        self.base_dir = Path(__file__).parent.parent.absolute()
         self.data_dir = self.base_dir / "data"
         self.test_db = self.data_dir / "test_integration.db"
         self.api_base_url = "http://localhost:8000"

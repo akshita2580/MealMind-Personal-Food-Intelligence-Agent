@@ -34,6 +34,8 @@ markers = [
     "asyncio: mark test as an async test",
 ]
 asyncio_mode = "auto"
+pythonpath = ["."]
+
 
 [tool.black]
 line-length = 100

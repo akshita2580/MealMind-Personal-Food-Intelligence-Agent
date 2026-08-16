@@ -37,6 +37,7 @@ logs/
 .env.development
 .env.test
 .env.production
+.dev_encryption_key
 
 # Temporary files
 *.tmp

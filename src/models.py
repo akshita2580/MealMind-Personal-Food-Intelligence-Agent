@@ -10,7 +10,7 @@ Cookies are intentionally absent from every model — they are only ever
 accepted as a transient function argument and never touch storage.
 """
 
-from datetime import datetime
+from datetime import datetime, timezone
 from pydantic import BaseModel, Field, SecretStr
 from sqlmodel import Field as SMField, Relationship, SQLModel
 
@@ -39,7 +39,7 @@ class Order(SQLModel, table=True):
     delivery_charge: float = 0.0
     gst: float = 0.0
     raw_json: str = ""                     # full original payload
-    created_at: datetime = SMField(default_factory=datetime.utcnow)  # timestamp when record was created
+    created_at: datetime = SMField(default_factory=lambda: datetime.now(timezone.utc))  # timestamp when record was created
 
     items: list["OrderItem"] = Relationship(back_populates="order")
 
@@ -78,6 +78,43 @@ class OrderCuisine(SQLModel, table=True):
     id: int | None = SMField(default=None, primary_key=True)
     order_id: str = SMField(index=True, foreign_key="orders.order_id")
     cuisine_name: str = SMField(index=True)
+
+
+class User(SQLModel, table=True):
+    """A FoodIQ user, mapped to a Telegram account."""
+
+    __tablename__ = "users"
+
+    id: int | None = SMField(default=None, primary_key=True)
+    telegram_id: str = SMField(unique=True, index=True)
+    created_at: datetime = SMField(default_factory=lambda: datetime.now(timezone.utc))
+
+
+class SwiggyConnection(SQLModel, table=True):
+    """An active Swiggy OAuth connection for a user."""
+
+    __tablename__ = "swiggy_connections"
+
+    id: int | None = SMField(default=None, primary_key=True)
+    user_id: int = SMField(foreign_key="users.id", unique=True)
+    status: str = "CONNECTED"
+    access_token: str = ""  # Stored encrypted at rest
+    expires_at: datetime | None = None
+    created_at: datetime = SMField(default_factory=lambda: datetime.now(timezone.utc))
+    updated_at: datetime = SMField(default_factory=lambda: datetime.now(timezone.utc))
+
+
+class OAuthState(SQLModel, table=True):
+    """Temporary state for securing the OAuth flow against CSRF and tracking PKCE."""
+
+    __tablename__ = "oauth_states"
+
+    state: str = SMField(primary_key=True)
+    telegram_id: str = SMField(index=True)
+    code_verifier: str = ""
+    expires_at: datetime
+    created_at: datetime = SMField(default_factory=lambda: datetime.now(timezone.utc))
+
 
 
 # ---------------------------------------------------------------------------

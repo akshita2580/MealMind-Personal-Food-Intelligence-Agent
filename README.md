@@ -584,6 +584,12 @@ curl http://localhost:8000/api/health
 Create a `.env` file in the project root:
 
 ```bash
+# Environment (development or production)
+ENVIRONMENT=development
+
+# Encryption Key for securing tokens (Required in production)
+ENCRYPTION_KEY=your_secure_fernet_key
+
 # Database location (default: data/swiggy.db)
 DATABASE_URL=data/swiggy.db
 
@@ -595,7 +601,21 @@ SWIGGY_API_URL=https://www.swiggy.com/dapi/order/all
 
 # Request timeout in seconds (default: 30)
 REQUEST_TIMEOUT=30
+
+# OAuth Canonical Callback URI
+SWIGGY_REDIRECT_URI=http://localhost:8000/api/auth/swiggy/callback
 ```
+
+### Security & Token Storage
+
+- In `development` (without `ENCRYPTION_KEY`), a local key is automatically generated and saved to `.dev_encryption_key` so local sessions persist across restarts. **DO NOT commit this file.**
+- In `production`, the server will **fail to start** if `ENCRYPTION_KEY` is not provided.
+- OAuth access tokens are always stored securely as ciphertext.
+- OAuth states are strictly single-use, non-replayable, and automatically cleaned up upon success, failure, or expiration.
+
+> **Important Limitation:**
+> OAuth authentication does NOT currently make the existing cookie-based `sync_orders` work. OAuth is used for account linking, but you must still provide cookies to the `sync_orders` endpoint to sync order history.
+
 
 ### Project Structure
 
