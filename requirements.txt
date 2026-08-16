@@ -1,0 +1,25 @@
+# Swiggy MCP Server - Python Dependencies
+# Generated from pyproject.toml
+# 
+# Installation:
+#   pip install -r requirements.txt
+#
+# Or use pyproject.toml directly:
+#   pip install -e .
+
+# Core dependencies
+fastapi>=0.115.0
+fastmcp>=2.0.0
+sqlmodel>=0.0.22
+httpx>=0.28.0
+uvicorn[standard]>=0.34.0
+pydantic>=2.0.0
+python-dotenv>=1.0.0
+
+# Development dependencies (optional)
+# Uncomment these for development:
+# pytest>=8.0.0
+# pytest-asyncio>=1.0.0
+# black>=24.0.0
+# ruff>=0.2.0
+# mypy>=1.8.0

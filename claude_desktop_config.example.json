@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "swiggy-ai-insights": {
+      "command": "node",
+      "args": ["/absolute/path/to/swiggy-ai-insights/index.js"],
+      "env": {
+        "NODE_ENV": "production"
+      }
+    }
+  }
+}
