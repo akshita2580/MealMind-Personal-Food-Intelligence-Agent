@@ -41,6 +41,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         )
         return
         
+    import hashlib
     # Generate OAuth state and PKCE verifier
     state = generate_oauth_state()
     verifier = generate_pkce_verifier()
@@ -50,20 +51,48 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     with get_session() as session:
         now_utc = datetime.now(timezone.utc)
         expires_at = now_utc + timedelta(minutes=15)
+        # Convert to naive UTC for SQLite storage
+        expires_at_naive = expires_at.replace(tzinfo=None)
         
-        logger.info(f"OAuth state created:")
-        logger.info(f"  created_at: {now_utc}")
-        logger.info(f"  expires_at: {expires_at}")
-        logger.info(f"  lifetime_seconds: {(expires_at - now_utc).total_seconds()}")
+        state_hash = hashlib.sha256(state.encode('utf-8')).hexdigest()[:12]
+        from .database import get_engine
+        engine_url = str(get_engine().url)
+        logger.info("OAuth state CREATED:")
+        logger.info(f"  hash={state_hash}")
+        logger.info(f"  length={len(state)}")
+        logger.info(f"  telegram_id={telegram_id}")
+        logger.info(f"  engine_url={engine_url}")
+        logger.info(f"  created_at={now_utc}")
+        logger.info(f"  expires_at={expires_at_naive} (naive UTC)")
         
         oauth_state = OAuthState(
             state=state,
             telegram_id=telegram_id,
             code_verifier=verifier,
-            expires_at=expires_at
+            expires_at=expires_at_naive
         )
         session.add(oauth_state)
         session.commit()
+        
+        # CRITICAL: Verify the state was actually persisted
+        verification_state = session.exec(select(OAuthState).where(OAuthState.state == state)).first()
+        if not verification_state:
+            logger.error("CRITICAL: State not found immediately after commit!")
+            logger.error(f"  State hash: {state_hash}")
+            await update.message.reply_text("❌ Sorry, there was an internal error. Please try again.")
+            return
+        logger.info(f"  ✓ State verified in database after commit")
+    
+    # Verify persistence with a FRESH session (simulate what callback will do)
+    with get_session() as verification_session:
+        fresh_lookup = verification_session.exec(select(OAuthState).where(OAuthState.state == state)).first()
+        if not fresh_lookup:
+            logger.error("CRITICAL: State not found in fresh session!")
+            logger.error(f"  State hash: {state_hash}")
+            await update.message.reply_text("❌ Sorry, there was an internal error. Please try again.")
+            return
+        logger.info(f"  ✓ State verified in fresh session")
+        logger.info(f"  Fresh session engine URL: {str(get_engine().url)}")
         
     # Build authorization URL
     from .dcr import get_or_register_client
@@ -90,6 +119,15 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     }
     
     auth_url = f"{auth_base_url}?{urllib.parse.urlencode(params)}"
+    
+    parsed_url = urllib.parse.urlparse(auth_url)
+    qs = urllib.parse.parse_qs(parsed_url.query)
+    auth_state_qs = qs.get("state", [""])[0]
+    auth_state_hash = hashlib.sha256(auth_state_qs.encode('utf-8')).hexdigest()[:12]
+    
+    logger.info("OAuth authorize URL generated:")
+    logger.info(f"authorize_state_hash={auth_state_hash}")
+    logger.info(f"authorize_state_length={len(auth_state_qs)}")
     
     keyboard = [
         [InlineKeyboardButton("Connect Swiggy", url=auth_url)]

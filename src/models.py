@@ -105,15 +105,20 @@ class SwiggyConnection(SQLModel, table=True):
 
 
 class OAuthState(SQLModel, table=True):
-    """Temporary state for securing the OAuth flow against CSRF and tracking PKCE."""
+    """Temporary state for securing the OAuth flow against CSRF and tracking PKCE.
+    
+    IMPORTANT: All datetime fields are stored as naive UTC datetimes in SQLite.
+    When creating: use datetime.now(timezone.utc).replace(tzinfo=None)
+    When reading: treat as UTC and add timezone if needed.
+    """
 
     __tablename__ = "oauth_states"
 
     state: str = SMField(primary_key=True)
     telegram_id: str = SMField(index=True)
     code_verifier: str = ""
-    expires_at: datetime
-    created_at: datetime = SMField(default_factory=lambda: datetime.now(timezone.utc))
+    expires_at: datetime  # Naive UTC datetime
+    created_at: datetime = SMField(default_factory=lambda: datetime.now(timezone.utc).replace(tzinfo=None))
 
 
 
