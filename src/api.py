@@ -274,7 +274,6 @@ async def swiggy_oauth_callback(
     logger.info(f"OAuth callback STATE:")
     logger.info(f"  callback_state_hash={cb_state_hash}")
     logger.info(f"  callback_state_length={len(state) if state else 0}")
-    logger.info(f"  callback_state_repr={repr(state[:4])}...{repr(state[-4:])} (first/last 4 chars)")
     logger.info(f"  engine_url={engine_url}")
     logger.info(f"  current_time={datetime.now(timezone.utc)}")
     
@@ -294,7 +293,6 @@ async def swiggy_oauth_callback(
     logger.info(f"DATABASE LOOKUP DIAGNOSTICS:")
     logger.info(f"  Total OAuthState rows: {len(total_states)}")
     logger.info(f"  engine_url={engine_url}")
-    logger.info(f"  Callback state (first/last 8 chars): {repr(state[:8])}...{repr(state[-8:])}")
     
     for i, row in enumerate(total_states):
         row_hash = hashlib.sha256(row.state.encode('utf-8')).hexdigest()[:12]

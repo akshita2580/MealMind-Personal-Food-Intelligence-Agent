@@ -62,7 +62,6 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         logger.info(f"  length={len(state)}")
         logger.info(f"  telegram_id={telegram_id}")
         logger.info(f"  engine_url={engine_url}")
-        logger.info(f"  created_at={now_utc}")
         logger.info(f"  expires_at={expires_at_naive} (naive UTC)")
         
         oauth_state = OAuthState(
