@@ -25,6 +25,7 @@ class Order(SQLModel, table=True):
     __tablename__ = "orders"
 
     order_id: str = SMField(primary_key=True)
+    user_id: int | None = SMField(default=None, foreign_key="users.id", index=True)  # Owner of this order
     restaurant_id: str = SMField(default="", index=True)
     restaurant_name: str = SMField(default="", index=True)  # indexed for query performance
     restaurant_locality: str = ""

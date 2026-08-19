@@ -43,13 +43,14 @@ mcp = FastMCP(
 # -----------------------------------------------------------------------
 
 @mcp.tool()
-def sync_orders(cookies: str, max_orders: int = 1000) -> str:
+def sync_orders(cookies: str, max_orders: int = 1000, user_id: int | None = None) -> str:
     """
     Fetch orders from the Swiggy API and store them in the local database.
 
     Args:
         cookies: Swiggy session cookies (required, runtime-only).
         max_orders: Maximum orders to fetch (default 1000).
+        user_id: The authenticated user ID
 
     Returns:
         Markdown summary of the sync result.
@@ -58,8 +59,8 @@ def sync_orders(cookies: str, max_orders: int = 1000) -> str:
         raw_orders = _run_async(fetcher.sync_orders, cookies, max_orders=max_orders)
 
         with _session_scope() as session:
-            new_count = repository.upsert_orders(raw_orders, session)
-            result = repository.get_sync_result(session)
+            new_count = repository.upsert_orders(raw_orders, session, user_id=user_id)
+            result = repository.get_sync_result(session, user_id=user_id)
             result.new_orders_fetched = new_count
 
         return (
@@ -90,6 +91,7 @@ def get_orders(
     end_date: str | None = None,
     restaurant_name: str | None = None,
     limit: int = 50,
+    user_id: int | None = None,
 ) -> str:
     """
     Retrieve orders from local storage with optional filters.
@@ -107,11 +109,16 @@ def get_orders(
         with _session_scope() as session:
             orders = repository.get_orders(
                 session,
+                user_id=user_id,
                 start_date=start_date,
                 end_date=end_date,
                 restaurant_name=restaurant_name,
                 limit=limit,
             )
+            
+            if not orders:
+                return "No real Swiggy orders are available yet. Please sync your orders."
+                
             total_spent = sum(o.order_total for o in orders)
             lines = _format_order_list(orders)
 
@@ -137,6 +144,7 @@ def get_restaurants(
     start_date: str | None = None,
     end_date: str | None = None,
     min_orders: int = 1,
+    user_id: int | None = None,
 ) -> str:
     """
     List all restaurants with order counts and spending stats.
@@ -151,15 +159,35 @@ def get_restaurants(
     """
     try:
         with _session_scope() as session:
-            restaurants = repository.get_restaurants(
-                session, start_date=start_date, end_date=end_date, min_orders=min_orders,
+            restaurants = repository.get_restaurants(session, user_id=user_id, start_date=start_date, end_date=end_date, min_orders=min_orders)
+            
+            if not restaurants:
+                return "No real Swiggy orders are available yet. Please sync your orders."
+
+            lines: list[str] = []
+            for i, r in enumerate(restaurants, 1):
+                cuisines = ", ".join(r.cuisines[:3]) + ("…" if len(r.cuisines) > 3 else "")
+                localities = ", ".join(r.localities[:2]) + ("…" if len(r.localities) > 2 else "")
+                lines.append(
+                    f"{i}. **{r.name}**\n"
+                    f"   📊 {r.order_count} orders • ₹{r.total_spent} total • ₹{r.avg_order_value} avg\n"
+                    f"   🍽️ {cuisines}\n"
+                    f"   📍 {localities}\n"
+                    f"   📅 {r.first_order} → {r.last_order}\n"
+                )
+
+            return (
+                f"# Restaurants List\n\n"
+                f"**Total Restaurants**: {len(restaurants)}\n"
+                f"**Minimum Orders**: {min_orders}\n"
+                f"**Date Range**: {start_date or 'All'} to {end_date or 'All'}\n\n"
+                f"## Restaurants (sorted by order count)\n\n"
+                + "\n".join(lines)
             )
     except Exception as exc:
         logger.exception("MCP get_restaurants failed: %s", type(exc).__name__)
         return _format_error("Restaurant Query Failed", "Unable to retrieve restaurants right now.")
 
-    lines: list[str] = []
-    for i, r in enumerate(restaurants, 1):
         cuisines = ", ".join(r.cuisines[:3]) + ("…" if len(r.cuisines) > 3 else "")
         localities = ", ".join(r.localities[:2]) + ("…" if len(r.localities) > 2 else "")
         lines.append(
@@ -189,6 +217,7 @@ def get_analytics(
     start_date: str | None = None,
     end_date: str | None = None,
     analysis_type: str = "summary",
+    user_id: int | None = None,
 ) -> str:
     """
     Generate analytics from your stored Swiggy orders.
@@ -205,10 +234,14 @@ def get_analytics(
         with _session_scope() as session:
             result = repository.build_analytics(
                 session,
+                user_id=user_id,
                 start_date=start_date,
                 end_date=end_date,
                 analysis_type=analysis_type,
             )
+            
+            if result.summary.total_orders == 0:
+                return "No real Swiggy orders are available yet. Please sync your orders."
     except Exception as exc:
         logger.exception("MCP get_analytics failed: %s", type(exc).__name__)
         return _format_error("Analytics Failed", "Unable to generate analytics right now.")
@@ -264,7 +297,11 @@ def get_analytics(
 # -----------------------------------------------------------------------
 
 @mcp.tool()
-def search_orders(query: str, limit: int = 20) -> str:
+def search_orders(
+    query: str,
+    limit: int = 20,
+    user_id: int | None = None,
+) -> str:
     """
     Search orders by restaurant name, cuisine, location, or item name.
 
@@ -277,7 +314,7 @@ def search_orders(query: str, limit: int = 20) -> str:
     """
     try:
         with _session_scope() as session:
-            orders = repository.search_orders(session, query, limit=limit)
+            orders = repository.search_orders(session, query, user_id=user_id, limit=limit)
             lines = _format_order_list(orders)
 
         return (
@@ -298,9 +335,10 @@ def search_orders(query: str, limit: int = 20) -> str:
 
 @mcp.tool()
 def get_food_insights(
+    period: str | None = None,
     start_date: str | None = None,
     end_date: str | None = None,
-    period: str | None = None,
+    user_id: int | None = None,
 ) -> str:
     """
     Generate personalized food intelligence insights from your order history.
@@ -323,6 +361,7 @@ def get_food_insights(
         with _session_scope() as session:
             response = build_food_insights_response(
                 session,
+                user_id=user_id,
                 start_date=start_date,
                 end_date=end_date,
                 period=period,
@@ -333,6 +372,9 @@ def get_food_insights(
         return _format_error("Insights Failed", "Unable to generate food insights right now.")
 
     period_label = response.period.get("label") or f"{start_date or 'All'} to {end_date or 'All'}"
+
+    if response.total_orders == 0:
+        return "No real Swiggy orders are available yet. Please sync your orders."
 
     if not insights:
         return (

@@ -41,12 +41,17 @@ _DAY_NAMES = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"
 # Write helpers
 # ---------------------------------------------------------------------------
 
-def upsert_orders(raw_orders: list[dict[str, Any]], session: Session) -> int:
+def upsert_orders(raw_orders: list[dict[str, Any]], session: Session, user_id: int | None = None) -> int:
     """
     Persist a batch of raw Swiggy API order dicts into SQLite.
     
     Uses UPSERT semantics (ON CONFLICT DO UPDATE) to handle duplicates.
     Parses and stores cuisines in the normalized order_cuisines table.
+    
+    Args:
+        raw_orders: List of raw order dicts from Swiggy API
+        session: Database session
+        user_id: Owner user ID for these orders (required for multi-user support)
     
     Returns the count of *newly inserted* orders (duplicates are updated but not counted).
     """
@@ -79,6 +84,7 @@ def upsert_orders(raw_orders: list[dict[str, Any]], session: Session) -> int:
         if is_new:
             order = Order(
                 order_id=oid,
+                user_id=user_id,  # Associate with user
                 restaurant_id=str(raw.get("restaurant_id", "")),
                 restaurant_name=raw.get("restaurant_name", ""),
                 restaurant_locality=raw.get("restaurant_locality", ""),
@@ -98,6 +104,11 @@ def upsert_orders(raw_orders: list[dict[str, Any]], session: Session) -> int:
             new_count += 1
         else:
             # UPSERT: Update existing order with latest data
+            if user_id is not None:
+                # Do not reassign ownership if someone else already owns this order
+                if existing.user_id is not None and existing.user_id != user_id:
+                    continue # Skip modifying this order
+                existing.user_id = user_id  # Update owner if it was null or already matched
             existing.restaurant_id = str(raw.get("restaurant_id", ""))
             existing.restaurant_name = raw.get("restaurant_name", "")
             existing.restaurant_locality = raw.get("restaurant_locality", "")
@@ -167,10 +178,10 @@ def upsert_orders(raw_orders: list[dict[str, Any]], session: Session) -> int:
     return new_count
 
 
-def get_sync_result(session: Session) -> SyncResult:
-    """Build a SyncResult snapshot from current DB state."""
-    total = _count_orders(session)
-    first, last = _date_coverage(session)
+def get_sync_result(session: Session, user_id: int | None = None) -> SyncResult:
+    """Build a SyncResult snapshot from current DB state for a specific user."""
+    total = _count_orders(session, user_id)
+    first, last = _date_coverage(session, user_id)
     coverage = f"{first} to {last}" if first and last else "No data"
     return SyncResult(new_orders_fetched=0, total_orders_in_db=total, date_coverage=coverage)
 
@@ -182,19 +193,23 @@ def get_sync_result(session: Session) -> SyncResult:
 def get_orders(
     session: Session,
     *,
+    user_id: int | None = None,
     start_date: str | None = None,
     end_date: str | None = None,
     restaurant_name: str | None = None,
     limit: int = 50,
 ) -> list[Order]:
     """
-    Filtered & sorted order query.
+    Filtered & sorted order query for a specific user.
     
-    Implements date filtering using SQL BETWEEN on order_time.
-    Implements restaurant_name filtering with case-insensitive LIKE.
-    Returns Pydantic model instances (Order is a SQLModel which is also a Pydantic model).
+    Implements user isolation, date filtering, and restaurant name search.
+    Returns orders belonging ONLY to the specified user.
     """
     stmt = select(Order)
+    
+    # USER ISOLATION: Filter by user_id
+    if user_id is not None:
+        stmt = stmt.where(col(Order.user_id) == user_id)
 
     # Date filtering using BETWEEN clause when both dates are provided
     if start_date and end_date:
@@ -228,15 +243,16 @@ def get_orders(
 def get_orders_in_range(
     session: Session,
     *,
+    user_id: int | None = None,
     start_date: str | None = None,
     end_date: str | None = None,
 ) -> list[Order]:
-    """Return every order in an optional date range, newest first."""
-    return _all_orders_in_range(session, start_date, end_date)
+    """Return every order for a user in an optional date range, newest first."""
+    return _all_orders_in_range(session, user_id=user_id, start_date=start_date, end_date=end_date)
 
 
-def search_orders(session: Session, query: str, *, limit: int = 20) -> list[Order]:
-    """Case-insensitive search across restaurant name, cuisines, locality, AND item names."""
+def search_orders(session: Session, query: str, *, user_id: int | None = None, limit: int = 20) -> list[Order]:
+    """Case-insensitive search across restaurant name, cuisines, locality, AND item names for a specific user."""
     pattern = f"%{query}%"
     
     # Subquery to find orders that have matching items
@@ -253,18 +269,24 @@ def search_orders(session: Session, query: str, *, limit: int = 20) -> list[Orde
         .order_by(col(Order.order_time).desc())
         .limit(limit)
     )
+    
+    # USER ISOLATION: Filter by user_id
+    if user_id is not None:
+        stmt = stmt.where(col(Order.user_id) == user_id)
+    
     return list(session.exec(stmt).all())
 
 
 def get_restaurants(
     session: Session,
     *,
+    user_id: int | None = None,
     start_date: str | None = None,
     end_date: str | None = None,
     min_orders: int = 1,
 ) -> list[RestaurantStats]:
-    """Aggregate per-restaurant statistics."""
-    orders = _all_orders_in_range(session, start_date, end_date)
+    """Aggregate per-restaurant statistics for a specific user."""
+    orders = _all_orders_in_range(session, user_id=user_id, start_date=start_date, end_date=end_date)
     buckets: dict[str, dict[str, Any]] = {}
 
     for o in orders:
@@ -315,11 +337,12 @@ def get_restaurants(
 def build_analytics(
     session: Session,
     *,
+    user_id: int | None = None,
     start_date: str | None = None,
     end_date: str | None = None,
     analysis_type: str = "summary",
 ) -> AnalyticsResult:
-    orders = _all_orders_in_range(session, start_date, end_date)
+    orders = _all_orders_in_range(session, user_id=user_id, start_date=start_date, end_date=end_date)
 
     if not orders:
         return AnalyticsResult(summary=AnalyticsSummary())
@@ -344,7 +367,7 @@ def build_analytics(
         result.peak_hours = _peak_hours(orders)
         result.day_distribution = _day_distribution(orders)
     elif analysis_type == "restaurants":
-        result.top_restaurants = get_restaurants(session, start_date=start_date, end_date=end_date)[:10]
+        result.top_restaurants = get_restaurants(session, user_id=user_id, start_date=start_date, end_date=end_date)[:10]
     elif analysis_type == "cuisines":
         result.top_cuisines = _cuisine_breakdown(orders)
 
@@ -420,11 +443,16 @@ def _cuisine_breakdown(orders: list[Order]) -> list[CuisineStats]:
 
 def _all_orders_in_range(
     session: Session,
-    start_date: str | None,
-    end_date: str | None,
+    *,
+    user_id: int | None = None,
+    start_date: str | None = None,
+    end_date: str | None = None,
 ) -> list[Order]:
-    """Unbounded query filtered only by optional date window."""
+    """Unbounded query filtered by optional user and date window."""
     stmt = select(Order)
+    # USER ISOLATION: Filter by user_id when provided
+    if user_id is not None:
+        stmt = stmt.where(col(Order.user_id) == user_id)
     if start_date:
         try:
             dt = datetime.strptime(start_date, "%Y-%m-%d")
@@ -441,15 +469,19 @@ def _all_orders_in_range(
     return list(session.exec(stmt).all())
 
 
-def _count_orders(session: Session) -> int:
+def _count_orders(session: Session, user_id: int | None = None) -> int:
     """Return total count of orders using efficient SQL COUNT."""
     stmt = select(func.count(Order.order_id))
+    if user_id is not None:
+        stmt = stmt.where(col(Order.user_id) == user_id)
     return session.exec(stmt).one()
 
 
-def _date_coverage(session: Session) -> tuple[str | None, str | None]:
+def _date_coverage(session: Session, user_id: int | None = None) -> tuple[str | None, str | None]:
     """Return min and max order times using efficient SQL MIN/MAX."""
     stmt = select(func.min(Order.order_time), func.max(Order.order_time))
+    if user_id is not None:
+        stmt = stmt.where(col(Order.user_id) == user_id)
     min_time, max_time = session.exec(stmt).first() or (None, None)
     
     first = min_time.strftime("%Y-%m-%d") if min_time else None

@@ -297,14 +297,16 @@ class InsightEngine:
     deterministic, explainable algorithms.
     """
     
-    def __init__(self, session: Session):
+    def __init__(self, session: Session, user_id: int | None = None):
         """
         Initialize the insight engine with a database session.
         
         Args:
             session: SQLModel session for database access
+            user_id: FoodIQ user ID to scope insights to (required for user-facing calls)
         """
         self.session = session
+        self.user_id = user_id
     
     def generate_all_insights(
         self,
@@ -331,6 +333,7 @@ class InsightEngine:
         # Get all orders in range (reuse existing repository method)
         orders = repository.get_orders_in_range(
             self.session,
+            user_id=self.user_id,
             start_date=resolved_period.start_date,
             end_date=resolved_period.end_date,
         )
@@ -1253,6 +1256,7 @@ def generate_food_insights(
     end_date: str | None = None,
     period: str | None = None,
     *,
+    user_id: int | None = None,
     today: date | None = None,
 ) -> list[Insight]:
     """
@@ -1267,7 +1271,7 @@ def generate_food_insights(
     Returns:
         List of Insight objects
     """
-    engine = InsightEngine(session)
+    engine = InsightEngine(session, user_id=user_id)
     return engine.generate_all_insights(start_date, end_date, period, today=today)
 
 
@@ -1277,6 +1281,7 @@ def build_food_insights_response(
     end_date: str | None = None,
     period: str | None = None,
     *,
+    user_id: int | None = None,
     today: date | None = None,
 ) -> InsightsListResponse:
     """Build the shared structured response used by REST and MCP."""
@@ -1286,10 +1291,12 @@ def build_food_insights_response(
         start_date=start_date,
         end_date=end_date,
         period=period,
+        user_id=user_id,
         today=today,
     )
     orders = repository.get_orders_in_range(
         session,
+        user_id=user_id,
         start_date=resolved_period.start_date,
         end_date=resolved_period.end_date,
     )

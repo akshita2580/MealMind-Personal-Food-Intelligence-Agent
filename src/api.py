@@ -287,98 +287,20 @@ async def swiggy_oauth_callback(
 
     from .models import User, SwiggyConnection, OAuthState
     
-    # 1. Validate State
-    # Diagnostic: enumerate ALL states in DB with their hashes
-    total_states = session.exec(select(OAuthState)).all()
-    logger.info(f"DATABASE LOOKUP DIAGNOSTICS:")
-    logger.info(f"  Total OAuthState rows: {len(total_states)}")
-    logger.info(f"  engine_url={engine_url}")
-    
-    for i, row in enumerate(total_states):
-        row_hash = hashlib.sha256(row.state.encode('utf-8')).hexdigest()[:12]
-        # Check exact comparison
-        exact_match = (row.state == state)
-        # Check byte-by-byte
-        bytes_match = (row.state.encode('utf-8') == state.encode('utf-8'))
-        logger.info(f"  row[{i}]: hash={row_hash} length={len(row.state)} telegram_id={row.telegram_id} expires_at={row.expires_at}")
-        logger.info(f"         exact_match={exact_match} bytes_match={bytes_match}")
-        if not exact_match and len(row.state) == len(state):
-            # Find first difference
-            for idx, (c1, c2) in enumerate(zip(row.state, state)):
-                if c1 != c2:
-                    logger.info(f"         first_diff_at={idx}: db={repr(c1)} callback={repr(c2)}")
-                    break
-    
-    matching_state = session.exec(select(OAuthState).where(OAuthState.state == state)).first()
-    logger.info(f"  Matching row for callback state: {matching_state is not None}")
-    if matching_state:
-        now_utc = datetime.now(timezone.utc)
-        ms_expires = matching_state.expires_at.replace(tzinfo=timezone.utc) if matching_state.expires_at.tzinfo is None else matching_state.expires_at
-        logger.info(f"  Matching state expires_at={ms_expires}")
-        logger.info(f"  Is matching state expired: {ms_expires < now_utc}")
-        logger.info(f"  current_time={now_utc}")
-        
+    # Validate State
     oauth_state = session.exec(select(OAuthState).where(OAuthState.state == state)).first()
     
-    # Opportunistic cleanup of stale states
-    now = datetime.now(timezone.utc)
-    # Compare with naive datetime since SQLite stores naive datetimes
-    now_naive = now.replace(tzinfo=None)
-    expired_states = session.exec(select(OAuthState).where(OAuthState.expires_at < now_naive)).all()
-    deleted_count = 0
-    state_exists_before = (oauth_state is not None)
-    
-    for st in expired_states:
-        if not oauth_state or st.state != oauth_state.state:
-            session.delete(st)
-            deleted_count += 1
-    if deleted_count > 0:
-        session.commit()
-        
-    # Re-check after cleanup
-    if state_exists_before and not oauth_state:
-        # This should never happen — just safety check
-        oauth_state = session.exec(select(OAuthState).where(OAuthState.state == state)).first()
-    state_exists_after = (session.exec(select(OAuthState).where(OAuthState.state == state)).first() is not None)
-    logger.info(f"CLEANUP DIAGNOSTICS:")
-    logger.info(f"  Expired states found: {len(expired_states)}")
-    logger.info(f"  States deleted: {deleted_count}")
-    logger.info(f"  Callback state exists BEFORE cleanup: {state_exists_before}")
-    logger.info(f"  Callback state exists AFTER cleanup: {state_exists_after}")
-
     if not oauth_state:
-        logger.error("OAuth state validation FAILED: State not found in database")
-        logger.error(f"  Searched for state hash: {cb_state_hash}")
-        logger.error(f"  State exists after cleanup: {state_exists_after}")
-        
-        # Additional diagnostic: Check if state exists in a completely fresh session
-        from .database import get_session as fresh_get_session
-        with fresh_get_session() as diagnostic_session:
-            diagnostic_all = diagnostic_session.exec(select(OAuthState)).all()
-            logger.error(f"  Diagnostic check - Total states in fresh session: {len(diagnostic_all)}")
-            for ds in diagnostic_all:
-                ds_hash = hashlib.sha256(ds.state.encode('utf-8')).hexdigest()[:12]
-                logger.error(f"    State: hash={ds_hash} telegram_id={ds.telegram_id}")
-        
+        logger.error(f"OAuth callback failed: Invalid state (hash={cb_state_hash})")
         return HTMLResponse("<h1>❌ Swiggy connection failed: Invalid or missing state.</h1>", status_code=400)
     
+    # Check expiry
     try:
         now_utc = datetime.now(timezone.utc)
-        expires_at_naive = oauth_state.expires_at
         expires_at_aware = oauth_state.expires_at.replace(tzinfo=timezone.utc) if oauth_state.expires_at.tzinfo is None else oauth_state.expires_at
-        
-        logger.info(f"OAuth state check:")
-        logger.info(f"  created_at: {oauth_state.created_at}")
-        logger.info(f"  expires_at (raw): {oauth_state.expires_at} (tzinfo: {oauth_state.expires_at.tzinfo})")
-        logger.info(f"  expires_at (aware): {expires_at_aware}")
-        logger.info(f"  now (UTC): {now_utc}")
-        logger.info(f"  remaining seconds: {(expires_at_aware - now_utc).total_seconds()}")
-        logger.info(f"  is_expired: {expires_at_aware < now_utc}")
 
         if expires_at_aware < now_utc:
-            logger.error("OAuth state validation FAILED: State expired")
-            logger.error(f"  State hash: {cb_state_hash}")
-            logger.error(f"  Expired by: {(now_utc - expires_at_aware).total_seconds()} seconds")
+            logger.error(f"OAuth callback failed: Expired state (hash={cb_state_hash})")
             return HTMLResponse("<h1>❌ Swiggy connection failed: State expired. Please try again.</h1>", status_code=400)
         
         telegram_id = oauth_state.telegram_id
