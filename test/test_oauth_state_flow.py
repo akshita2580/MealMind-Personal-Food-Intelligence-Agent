@@ -28,18 +28,10 @@ from src.security import generate_oauth_state, generate_pkce_verifier
 
 @pytest.fixture
 def test_session():
-    """Create a test database session."""
-    from src.database import create_db_and_tables
-    
-    # Use test database
-    os.environ["DATABASE_URL"] = "data/test_oauth_flow.db"
-    
-    # Clear the engine cache
+    """Create a test database session using the global test DB."""
+    # Clear the engine cache just in case
     from src.database import get_engine
     get_engine.cache_clear()
-    
-    # Create tables
-    create_db_and_tables()
     
     with get_session() as session:
         # Clean up any existing data

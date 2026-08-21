@@ -41,7 +41,54 @@ _DAY_NAMES = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"
 # Write helpers
 # ---------------------------------------------------------------------------
 
-def upsert_orders(raw_orders: list[dict[str, Any]], session: Session, user_id: int | None = None) -> int:
+import re
+
+def _parse_currency(val: Any) -> float:
+    if val is None:
+        return 0.0
+    if isinstance(val, (int, float)):
+        return float(val)
+    val_str = str(val)
+    # Remove all non-numeric characters except period and minus
+    cleaned = re.sub(r'[^\d\.-]', '', val_str)
+    try:
+        return float(cleaned) if cleaned else 0.0
+    except ValueError:
+        return 0.0
+
+def _parse_order_time(order_time_str: str) -> datetime | None:
+    if not order_time_str:
+        return None
+    try:
+        clean_time_str = order_time_str.replace('Z', '+00:00')
+        return datetime.fromisoformat(clean_time_str)
+    except ValueError:
+        pass
+        
+    # fallback formats for Swiggy's human-readable dates
+    formats = [
+        "%B %d, %I:%M %p", # e.g. "February 12, 9:08 PM"
+        "%b %d, %I:%M %p",
+        "%B %d %Y, %I:%M %p",
+    ]
+    for fmt in formats:
+        try:
+            dt = datetime.strptime(order_time_str, fmt)
+            if dt.year == 1900:
+                now = datetime.now()
+                # If the parsed month is in the future compared to now, 
+                # it means the order was placed last year
+                if dt.month > now.month:
+                    dt = dt.replace(year=now.year - 1)
+                else:
+                    dt = dt.replace(year=now.year)
+            return dt
+        except ValueError:
+            continue
+            
+    return None
+
+def upsert_orders(raw_orders: list[dict[str, Any]], session: Session, *, user_id: int) -> int:
     """
     Persist a batch of raw Swiggy API order dicts into SQLite.
     
@@ -66,16 +113,11 @@ def upsert_orders(raw_orders: list[dict[str, Any]], session: Session, user_id: i
         existing = session.get(Order, oid)
         is_new = existing is None
 
-        # Parse order_time (Swiggy format: "YYYY-MM-DD HH:MM:SS" or similar)
+        # Parse order_time
         order_time_str = raw.get("order_time", "")
-        order_time: datetime | None = None
-        if order_time_str:
-            try:
-                # Replace 'T' with space if it's ISO, then take first 19 chars
-                clean_time_str = order_time_str.replace("T", " ")[:19]
-                order_time = datetime.strptime(clean_time_str, "%Y-%m-%d %H:%M:%S")
-            except ValueError:
-                logger.warning(f"Failed to parse order_time: {order_time_str} for order {oid}")
+        order_time = _parse_order_time(order_time_str)
+        if not order_time and order_time_str:
+            logger.warning(f"Failed to parse order_time: {order_time_str} for order {oid}")
 
         # Parse cuisines list
         cuisines = raw.get("restaurant_cuisine") or []
@@ -91,13 +133,13 @@ def upsert_orders(raw_orders: list[dict[str, Any]], session: Session, user_id: i
                 restaurant_city=raw.get("restaurant_city_name", ""),
                 restaurant_cuisines=", ".join(cuisines),  # Keep denormalized for convenience
                 order_time=order_time,
-                order_total=float(raw.get("order_total", 0)),
+                order_total=_parse_currency(raw.get("order_total")),
                 order_status=raw.get("order_status", "Delivered"),
                 payment_method=raw.get("payment_method", ""),
                 delivery_address=raw.get("delivery_address", {}).get("address", ""),
-                order_discount=float(raw.get("order_discount", 0)),
-                delivery_charge=float(raw.get("order_delivery_charge", 0)),
-                gst=float(raw.get("order_tax", 0)),
+                order_discount=_parse_currency(raw.get("order_discount")),
+                delivery_charge=_parse_currency(raw.get("order_delivery_charge")),
+                gst=_parse_currency(raw.get("order_tax")),
                 raw_json=json.dumps(raw),
             )
             session.add(order)
@@ -115,13 +157,13 @@ def upsert_orders(raw_orders: list[dict[str, Any]], session: Session, user_id: i
             existing.restaurant_city = raw.get("restaurant_city_name", "")
             existing.restaurant_cuisines = ", ".join(cuisines)
             existing.order_time = order_time
-            existing.order_total = float(raw.get("order_total", 0))
+            existing.order_total = _parse_currency(raw.get("order_total"))
             existing.order_status = raw.get("order_status", "Delivered")
             existing.payment_method = raw.get("payment_method", "")
             existing.delivery_address = raw.get("delivery_address", {}).get("address", "")
-            existing.order_discount = float(raw.get("order_discount", 0))
-            existing.delivery_charge = float(raw.get("order_delivery_charge", 0))
-            existing.gst = float(raw.get("order_tax", 0))
+            existing.order_discount = _parse_currency(raw.get("order_discount"))
+            existing.delivery_charge = _parse_currency(raw.get("order_delivery_charge"))
+            existing.gst = _parse_currency(raw.get("order_tax"))
             existing.raw_json = json.dumps(raw)
             session.add(existing)
 
@@ -149,11 +191,11 @@ def upsert_orders(raw_orders: list[dict[str, Any]], session: Session, user_id: i
             for item_raw in raw.get("order_items") or []:
                 item = OrderItem(
                     order_id=oid,
-                    item_id=str(item_raw.get("item_id", "")),
+                    item_id=str(item_raw.get("item_id") or item_raw.get("itemId") or ""),
                     name=item_raw.get("name", ""),
                     quantity=int(item_raw.get("quantity", 1)),
-                    price=float(item_raw.get("total", 0)),
-                    is_veg=item_raw.get("is_veg") in (True, 1, "1"),
+                    price=_parse_currency(item_raw.get("total")),
+                    is_veg=item_raw.get("is_veg") or item_raw.get("isVeg") in (True, 1, "1"),
                 )
                 session.add(item)
         else:
@@ -166,11 +208,11 @@ def upsert_orders(raw_orders: list[dict[str, Any]], session: Session, user_id: i
             for item_raw in raw.get("order_items") or []:
                 item = OrderItem(
                     order_id=oid,
-                    item_id=str(item_raw.get("item_id", "")),
+                    item_id=str(item_raw.get("item_id") or item_raw.get("itemId") or ""),
                     name=item_raw.get("name", ""),
                     quantity=int(item_raw.get("quantity", 1)),
-                    price=float(item_raw.get("total", 0)),
-                    is_veg=item_raw.get("is_veg") in (True, 1, "1"),
+                    price=_parse_currency(item_raw.get("total")),
+                    is_veg=item_raw.get("is_veg") or item_raw.get("isVeg") in (True, 1, "1"),
                 )
                 session.add(item)
 
@@ -178,7 +220,7 @@ def upsert_orders(raw_orders: list[dict[str, Any]], session: Session, user_id: i
     return new_count
 
 
-def get_sync_result(session: Session, user_id: int | None = None) -> SyncResult:
+def get_sync_result(session: Session, *, user_id: int) -> SyncResult:
     """Build a SyncResult snapshot from current DB state for a specific user."""
     total = _count_orders(session, user_id)
     first, last = _date_coverage(session, user_id)
@@ -251,7 +293,7 @@ def get_orders_in_range(
     return _all_orders_in_range(session, user_id=user_id, start_date=start_date, end_date=end_date)
 
 
-def search_orders(session: Session, query: str, *, user_id: int | None = None, limit: int = 20) -> list[Order]:
+def search_orders(session: Session, query: str, *, user_id: int, limit: int = 20) -> list[Order]:
     """Case-insensitive search across restaurant name, cuisines, locality, AND item names for a specific user."""
     pattern = f"%{query}%"
     
@@ -469,7 +511,7 @@ def _all_orders_in_range(
     return list(session.exec(stmt).all())
 
 
-def _count_orders(session: Session, user_id: int | None = None) -> int:
+def _count_orders(session: Session, *, user_id: int) -> int:
     """Return total count of orders using efficient SQL COUNT."""
     stmt = select(func.count(Order.order_id))
     if user_id is not None:
@@ -477,7 +519,7 @@ def _count_orders(session: Session, user_id: int | None = None) -> int:
     return session.exec(stmt).one()
 
 
-def _date_coverage(session: Session, user_id: int | None = None) -> tuple[str | None, str | None]:
+def _date_coverage(session: Session, *, user_id: int) -> tuple[str | None, str | None]:
     """Return min and max order times using efficient SQL MIN/MAX."""
     stmt = select(func.min(Order.order_time), func.max(Order.order_time))
     if user_id is not None:

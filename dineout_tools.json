@@ -1,0 +1,590 @@
+{
+  "result": {
+    "tools": [
+      {
+        "name": "get_saved_locations",
+        "_meta": {
+          "ui": {
+            "resourceUri": "ui://widget/dineout-locations.html"
+          }
+        },
+        "description": "Swiggy Dineout (Reservations): Get user's saved addresses for restaurant search. NOT for food delivery or grocery orders. Returns address IDs that can be passed to search_restaurants_dineout.\n\nWHEN TO USE THIS TOOL: \n- User says \"near my home\" \n- User says \"near my office\" \n- User says \"my location\" or \"my address\" \n- User says \"where I live\" or \"my place\" \n\n DO NOT USE when user mentions a specific city/area (Bangalore, Koramangala, Mumbai) - use coordinates directly in search_restaurants_dineout instead. \n\n WORKFLOW: \n1. Call this tool to get saved locations \n2. Show locations to user as numbered list \n3. Ask: \"Which location would you like to search near?\" \n4. Pass the chosen location's id as addressId in search_restaurants_dineout \n\nRETURNS: List with index (1, 2, 3...), id, and addressLine for each saved address.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {},
+          "required": []
+        },
+        "annotations": {
+          "title": "Get Saved Locations",
+          "readOnlyHint": true,
+          "destructiveHint": false,
+          "idempotentHint": true,
+          "openWorldHint": false
+        }
+      },
+      {
+        "name": "search_restaurants_dineout",
+        "description": "Swiggy Dineout (Reservations): find restaurants to BOOK A TABLE at. Use when the user wants to go out and eat. NOT for food delivery or grocery orders. Returns cuisines, rating, cost for two, distance, highlights, offers and bookable deals.\n\nQUERY - pass the single thing the user is looking for, not their sentence:\n- a restaurant or chain name: \"Toit\", \"Social\", \"Ironhill\"\n- a cuisine: \"Italian\", \"Biryani\", \"North Indian\"\n- an area or landmark: \"Indiranagar\", \"Phoenix Mall of Asia\"\n- a kind of place: \"cafe\", \"pub\", \"brewery\", \"lounge\"\n- a vibe or amenity: \"rooftop\", \"buffet\", \"live music\", \"pet friendly\", \"outdoor seating\"\nThe search resolves what the term means on its own. Send the term only: \"best rooftop places in Koramangala\" becomes query=\"rooftop\" with Koramangala coordinates. For a dish, search the cuisine that serves it (\"dosa\" becomes \"South Indian\"). Misspellings are tolerated.\n\nLOCATION (required) - one of:\n1. \"near my home\", \"near my office\", \"near me\" -> call get_saved_locations first, then pass the chosen addressId.\n2. A named city or area -> pass its latitude/longitude. Bangalore 12.9716, 77.5946 | Koramangala 12.9352, 77.6245 | Indiranagar 12.9784, 77.6408 | Mumbai 19.0760, 72.8777 | Delhi 28.6139, 77.2090.\nCoordinates must match the place the user asked about. If you do not know them, ask the user rather than guessing a different city.\n\nRESULTS - returns up to `limit` restaurants (default 10). If more matched, the message says so; call again with `offset` to show the next set. An empty result means nothing matched: tell the user and offer a different term. Never present unrelated restaurants as matches.\n\nEXAMPLES:\n- \"italian place in bangalore\" -> query=\"Italian\", lat=12.9716, lng=77.5946\n- \"somewhere in indiranagar\" -> query=\"Indiranagar\", lat=12.9784, lng=77.6408\n- \"rooftop bar for tonight\" -> query=\"rooftop\" with the user's city coordinates\n- \"is there a Toit near me\" -> get_saved_locations first, then query=\"Toit\" with the addressId\n\nAfter showing results, let the user pick a restaurant. Do NOT automatically call get_restaurant_details or get_available_slots.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "query": {
+              "type": "string",
+              "description": "What to search for: a restaurant name, cuisine, area, kind of place (cafe, pub, brewery), or vibe (rooftop, buffet, live music). One term, not a sentence, and no location words when latitude/longitude already cover the location.",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            "entityType": {
+              "type": "string",
+              "enum": [
+                "locality",
+                "CUISINE",
+                "RESTAURANT_CATEGORY",
+                "ambience_tags"
+              ],
+              "description": "Rarely needed. The search already works out whether the query is a cuisine, area, category or vibe. Set this only to force a specific interpretation of an ambiguous term."
+            },
+            "addressId": {
+              "type": "string",
+              "description": "Address ID from get_saved_locations. Coordinates are resolved server-side. Use this instead of latitude/longitude when searching near a saved address.",
+              "minLength": 1,
+              "maxLength": 64,
+              "pattern": "^[A-Za-z0-9_-]+$"
+            },
+            "latitude": {
+              "type": "number",
+              "description": "Latitude for search. Use for direct city/area searches. Not needed if addressId is provided."
+            },
+            "longitude": {
+              "type": "number",
+              "description": "Longitude for search. Use for direct city/area searches. Not needed if addressId is provided."
+            },
+            "limit": {
+              "type": "number",
+              "description": "Max restaurants to return. Default 10, max 30.",
+              "minimum": 1,
+              "maximum": 30
+            },
+            "offset": {
+              "type": "number",
+              "description": "Restaurants to skip. Use the offset given in the previous response to show more of the same search.",
+              "minimum": 0
+            }
+          },
+          "required": [
+            "query"
+          ]
+        },
+        "annotations": {
+          "title": "Search Restaurants (Dineout)",
+          "readOnlyHint": true,
+          "destructiveHint": false,
+          "idempotentHint": true,
+          "openWorldHint": false
+        }
+      },
+      {
+        "name": "get_restaurant_details",
+        "_meta": {
+          "ui": {
+            "resourceUri": "ui://widget/dineout-details.html"
+          }
+        },
+        "description": "Swiggy Dineout (Reservations): Get details about a specific restaurant for TABLE BOOKING. NOT for food delivery or grocery orders. Returns ratings, deals and offers, opening/closing timings, address, menu images, and amenities (valet parking, live music, outdoor seating, etc.). Use this to show the user detailed information about a restaurant so they can decide whether to book a table. IMPORTANT: When the user selects a restaurant from search results or says \"show details for [name]\", call this tool directly with the restaurantId from the previous search_restaurants_dineout response. Do NOT call search_restaurants_dineout again. Use same coordinates that were used in the search. After showing details, ask if the user wants to check availability or book a table. Do NOT automatically call get_available_slots \u2014 wait for the user to decide.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "restaurantId": {
+              "type": "string",
+              "description": "Restaurant ID from search results"
+            },
+            "latitude": {
+              "type": "number",
+              "description": "Latitude (use same as search)"
+            },
+            "longitude": {
+              "type": "number",
+              "description": "Longitude (use same as search)"
+            }
+          },
+          "required": [
+            "restaurantId",
+            "latitude",
+            "longitude"
+          ]
+        },
+        "annotations": {
+          "title": "Get Restaurant Details",
+          "readOnlyHint": true,
+          "destructiveHint": false,
+          "idempotentHint": true,
+          "openWorldHint": false
+        }
+      },
+      {
+        "name": "render_restaurants_dineout",
+        "_meta": {
+          "ui": {
+            "resourceUri": "ui://widget/dineout-search.html"
+          }
+        },
+        "description": "Swiggy Dineout: display restaurant cards in a rich UI widget. Call this AFTER search_restaurants_dineout, once you have decided which restaurants to show and in what order. Pass restaurantIds (from the search results) in display order, plus searches \u2014 the list of search(es) you ran ({ query, latitude, longitude, entityType? }). The server re-fetches and merges those searches to rebuild the full card data, so you never resend it. If you searched multiple times (e.g. different cuisines or areas), include every search whose results you are showing \u2014 ids are resolved across all of them. ORDERING: order the ids by the user's intent \u2014 cheapest/budget \u2192 cost low to high, best/top-rated \u2192 rating high to low, nearest/fastest \u2192 distance, otherwise overall relevance. Use your judgment when the ask is implicit. Call it once with your final curated, ordered list \u2014 not after every search.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "restaurantIds": {
+              "type": "array",
+              "description": "Restaurant ids (from search_restaurants_dineout results) in the exact order to display, ranked per the user's intent. May span multiple searches.",
+              "items": {
+                "type": "string"
+              },
+              "minItems": 1,
+              "maxItems": 50
+            },
+            "searches": {
+              "type": "array",
+              "description": "The search(es) you ran to gather these ids. The server re-runs each to rebuild card data. Include one entry per distinct search whose results you are showing.",
+              "minItems": 1,
+              "maxItems": 5,
+              "items": {
+                "type": "object",
+                "properties": {
+                  "query": {
+                    "type": "string",
+                    "description": "The query passed to that search_restaurants_dineout call.",
+                    "minLength": 1,
+                    "maxLength": 256
+                  },
+                  "latitude": {
+                    "type": "number",
+                    "description": "Latitude returned by that search."
+                  },
+                  "longitude": {
+                    "type": "number",
+                    "description": "Longitude returned by that search."
+                  },
+                  "entityType": {
+                    "type": "string",
+                    "description": "The entityType used for that search, if any."
+                  }
+                },
+                "required": [
+                  "query",
+                  "latitude",
+                  "longitude"
+                ]
+              }
+            }
+          },
+          "required": [
+            "restaurantIds",
+            "searches"
+          ]
+        },
+        "annotations": {
+          "title": "Show Restaurants (Dineout)",
+          "readOnlyHint": true,
+          "destructiveHint": false,
+          "idempotentHint": true,
+          "openWorldHint": false
+        }
+      },
+      {
+        "name": "get_available_slots",
+        "_meta": {
+          "ui": {
+            "resourceUri": "ui://widget/dineout-slots.html"
+          }
+        },
+        "description": "Swiggy Dineout (Reservations): Check available time slots for TABLE BOOKING at a restaurant. NOT for food delivery or grocery orders. Returns breakfast, lunch, and dinner slots for up to 7 DAYS starting from the requested date in a single call. The widget handles date switching client-side \u2014 do NOT call this tool again when the user picks a different date in the widget. Date must be in YYYY-MM-DD format (e.g., \"2026-04-20\") or epoch timestamp. Each slot contains deals \u2014 FREE (isFree=true) and PAID prebook/prime deals (isFree=false, with a price). Surface BOTH to the user. FREE deals book directly via book_table. PAID deals book via UPI: create_cart (DEAL_TICKET_PURCHASE) \u2192 get_payment_options \u2192 book_table with paymentMethod=\"UPI\". Each slot in the response contains: - dateStr: Date the slot belongs to (YYYY-MM-DD) - slotId: From slot.deals[].slotId - reservationTime: Epoch timestamp (slot.reservationTime) - itemId: From slot.deals[].itemId (format: \"restaurantId-ticketId\") - displayTime: e.g., \"10:00 AM\" - slotGroupName: \"Breakfast\", \"Lunch\", or \"Dinner\" - deals[]: Each deal has title, isFree, bookingPrice (\u20b9 cover charge; bookingPrice>0 / isFree=false means a PAID prebook deal, even if the title reads like a discount), dealCategory, discountPercentage Example: \"What times are available at [Restaurant] on [Date]?\" \u2192 Call with restaurant ID and date. Example: User changes date in widget \u2192 Do NOT call this tool again; the widget already has all 7 days loaded. RULES: - If the user confirms a time/date combo visible in the response, TRUST it and call book_table directly. - For dates other than the first, the per-date summary gives meal-type ranges; the structuredContent has the exact slotId/itemId/reservationTime. - Do NOT call get_available_slots again for a different date \u2014 the response already contains all 7 days. After showing slots, let the user pick a date and time. Do NOT automatically call book_table \u2014 wait for the user to confirm their choice.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "restaurantId": {
+              "type": "string",
+              "description": "Restaurant ID from search or details"
+            },
+            "date": {
+              "type": "string",
+              "description": "Starting date as YYYY-MM-DD string (e.g., \"2026-04-20\") or epoch timestamp as numeric string (e.g., \"1735689600\"). Returns slots for up to 7 days from this date."
+            },
+            "latitude": {
+              "type": "number",
+              "description": "User's latitude"
+            },
+            "longitude": {
+              "type": "number",
+              "description": "User's longitude"
+            }
+          },
+          "required": [
+            "restaurantId",
+            "date",
+            "latitude",
+            "longitude"
+          ]
+        },
+        "annotations": {
+          "title": "Get Available Slots",
+          "readOnlyHint": true,
+          "destructiveHint": false,
+          "idempotentHint": true,
+          "openWorldHint": false
+        }
+      },
+      {
+        "name": "book_table",
+        "_meta": {
+          "ui": {
+            "resourceUri": "ui://widget/im-checkout.html"
+          }
+        },
+        "description": "Swiggy Dineout (Reservations): Book a table at a restaurant for a specific time slot. NOT for food delivery or grocery orders. Books FREE reservations directly, and PAID prebook deals via UPI. FREE deal (isFree=true): pass slot details only \u2014 book_table creates the cart and confirms in one step. PAID deal (isFree=false): first call create_cart (cartType=\"DEAL_TICKET_PURCHASE\") to create the cart \u2014 it shows a Booking Summary and STOPS. Only after the user taps \"Proceed to payment\" do you show payment methods; let the user pick a UPI app, then call book_table with paymentMethod=\"UPI\", the chosen intentApp, and the cartKey from create_cart. It returns PENDING_PAYMENT \u2014 then poll check_payment_status and call confirm_order. Requires slot details from get_available_slots: slotId, itemId, reservationTime. Returns booking confirmation with order ID. \n\nCONFIRMATION RULES: \n- If the user message starts with \"Confirm booking:\" \u2014 they already confirmed via the widget UI. Call book_table IMMEDIATELY without showing a summary or asking again. \n- If the user types a booking request manually (e.g. \"Book a table for 2 at 7 PM\"), show a brief summary and ask for confirmation before calling book_table. \n\nSLOT MATCHING RULES \u2014 read before responding to user: \n1. When the user message names a specific date + time (e.g. \"Book a table for 2 guests at 02:30 PM on 2026-04-18\"), look up THAT SPECIFIC date in the previous get_available_slots response per-date summary. DO NOT use the first-date summary or today's summary to decide availability for a different date. \n2. If the per-date summary for the requested date shows a matching meal window (e.g. \"2026-04-18: Lunch (12:00 PM\u20134:45 PM, 20 slots)\"), the slot EXISTS \u2014 every 15-minute time within the range is bookable. TRUST the widget \u2014 do NOT tell the user \"that time is not available\". \n3. Find the matching slot in get_available_slots response: slot with dateStr=requested-date AND displayTime=requested-time. Use the deal the user chose (free or paid) from that slot \u2014 read its slotId, itemId, and the slot's reservationTime. Pass those EXACT values to book_table (for a paid deal, also pass paymentMethod=\"UPI\", intentApp, and cartKey). \n4. Pass restaurantId, latitude, longitude from the previous search_restaurants_dineout or get_restaurant_details response. \n\nCANCELLATION: If the user asks to cancel this booking, tell them to cancel it from the Swiggy Dineout app, or by calling customer care at 080-67466729.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "restaurantId": {
+              "type": "string",
+              "description": "Restaurant ID"
+            },
+            "slotId": {
+              "type": "number",
+              "description": "Slot ID from selected slot (slot.deals[].slotId)"
+            },
+            "itemId": {
+              "type": "string",
+              "description": "Deal/ticket item ID (slot.deals[].itemId, format: \"restaurantId-ticketId\")"
+            },
+            "reservationTime": {
+              "type": "number",
+              "description": "Unix timestamp from selected slot (slot.reservationTime)"
+            },
+            "guestCount": {
+              "type": "number",
+              "description": "Number of guests (1-20)"
+            },
+            "latitude": {
+              "type": "number",
+              "description": "Latitude from user address"
+            },
+            "longitude": {
+              "type": "number",
+              "description": "Longitude from user address"
+            },
+            "paymentMethod": {
+              "type": "string",
+              "enum": [
+                "Cash",
+                "UPI"
+              ],
+              "description": "Omit (or \"Cash\") for FREE reservations. Use \"UPI\" for paid prebook deals (also pass cartKey + intentApp)."
+            },
+            "cartKey": {
+              "type": "string",
+              "description": "Paid UPI prebook only: cartKey returned by create_cart (DEAL_TICKET_PURCHASE)."
+            },
+            "intentApp": {
+              "type": "string",
+              "description": "Paid UPI prebook only: the UPI app id chosen from get_payment_options. Omit when generateUPIQR=true."
+            },
+            "generateUPIQR": {
+              "type": "boolean",
+              "description": "Paid UPI prebook on desktop: true for a scannable QR instead of an app intent."
+            },
+            "tidOverride": {
+              "type": "string",
+              "description": "Optional: Override transaction ID (tid) from auth context"
+            }
+          },
+          "required": [
+            "restaurantId",
+            "slotId",
+            "itemId",
+            "reservationTime",
+            "guestCount",
+            "latitude",
+            "longitude"
+          ]
+        },
+        "annotations": {
+          "title": "Book Table",
+          "readOnlyHint": false,
+          "destructiveHint": false,
+          "idempotentHint": false,
+          "openWorldHint": true
+        }
+      },
+      {
+        "name": "create_cart",
+        "_meta": {
+          "ui": {
+            "resourceUri": "ui://widget/dineout-cart.html"
+          }
+        },
+        "description": "Swiggy Dineout (Reservations): Create a booking cart. NOT for food delivery or grocery orders. Use this for PAID prebook deals (isFree=false): call with cartType=\"DEAL_TICKET_PURCHASE\" + slot details + guest count. It returns the cartKey and shows a Booking Summary card. STOP after this \u2014 wait for the user to tap \"Proceed to payment\" before showing any payment methods. After they pick a method, call book_table with paymentMethod=\"UPI\", the chosen intentApp, and that cartKey. For FREE deals, skip this \u2014 call book_table directly (it creates + confirms the free cart in one step).",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "restaurantId": {
+              "type": "string",
+              "description": "Restaurant ID"
+            },
+            "cartType": {
+              "type": "string",
+              "enum": [
+                "DEAL_TICKET_PURCHASE",
+                "DINEOUT"
+              ],
+              "description": "Cart type: DEAL_TICKET_PURCHASE for booking, DINEOUT for bill payment"
+            },
+            "latitude": {
+              "type": "number",
+              "description": "Latitude"
+            },
+            "longitude": {
+              "type": "number",
+              "description": "Longitude"
+            },
+            "slotId": {
+              "type": "number",
+              "description": "Slot ID (required for booking cart)"
+            },
+            "itemId": {
+              "type": "string",
+              "description": "Item ID (required for booking cart, format: \"restaurantId-ticketId\")"
+            },
+            "reservationTime": {
+              "type": "number",
+              "description": "Unix timestamp (required for booking cart)"
+            },
+            "guestCount": {
+              "type": "number",
+              "description": "Number of guests (required for booking cart, 1-20)"
+            },
+            "billAmount": {
+              "type": "number",
+              "description": "Bill amount in rupees (required for bill payment cart)"
+            },
+            "source": {
+              "type": "string",
+              "description": "Source for bill payment cart (default: \"direct-payment-cart\")"
+            }
+          },
+          "required": [
+            "restaurantId",
+            "cartType",
+            "latitude",
+            "longitude"
+          ]
+        },
+        "annotations": {
+          "title": "Create Dineout Cart",
+          "readOnlyHint": false,
+          "destructiveHint": false,
+          "idempotentHint": false,
+          "openWorldHint": false
+        }
+      },
+      {
+        "name": "get_booking_status",
+        "_meta": {
+          "ui": {
+            "resourceUri": "ui://widget/dineout-status.html"
+          }
+        },
+        "description": "Swiggy Dineout (Reservations): Get booking status and details for a dineout reservation. NOT for food delivery or grocery orders. Returns restaurant name, booking date and time, guest count, deal title, and current status (confirmed/cancelled/completed). Use this when the user asks about their reservation status, booking details, or wants to check if their table is still confirmed. Example: \"What is the status of my booking?\" \u2192 Call with order ID. Example: \"Is my reservation still on?\" \u2192 Call with order ID from previous book_table response. \n\nCANCELLATION: If the user asks to cancel this booking, tell them to cancel it from the Swiggy Dineout app, or by calling customer care at 080-67466729.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "orderId": {
+              "type": "string",
+              "description": "Order ID from booking confirmation"
+            }
+          },
+          "required": [
+            "orderId"
+          ]
+        },
+        "annotations": {
+          "title": "Get Booking Status",
+          "readOnlyHint": true,
+          "destructiveHint": false,
+          "idempotentHint": true,
+          "openWorldHint": false
+        }
+      },
+      {
+        "name": "report_error",
+        "description": "Generate an error report to share with the Swiggy MCP team. Use this when the user encounters an error and wants to report it. Returns a pre-filled mailto: link and a human-readable summary. The user can click the link to open their email client with the report ready to send. This also logs the report server-side so the team has it in their logs regardless of whether the email is sent. IMPORTANT: Always include toolContext with the specific identifiers from the failed tool call \u2014 e.g., orderId, restaurantId, addressId, spinId, menu_item_id, couponCode, query, cartId, slotId, paymentMethod. Include whichever IDs were part of the failed request so the team can trace the exact issue.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "tool": {
+              "type": "string",
+              "description": "Name of the tool that errored (e.g., \"checkout\", \"search_products\", \"place_food_order\")"
+            },
+            "domain": {
+              "type": "string",
+              "description": "Domain prefix where the error occurred (e.g., \"im\", \"food\", \"dineout\"). Auto-detected if not provided."
+            },
+            "errorMessage": {
+              "type": "string",
+              "description": "The error message the user saw"
+            },
+            "flowDescription": {
+              "type": "string",
+              "description": "Brief description of what the user was doing (e.g., \"searched for milk \u2192 added to cart \u2192 checkout failed\")"
+            },
+            "toolContext": {
+              "type": "object",
+              "description": "Key-value pairs of identifiers from the failed tool call. Include ALL relevant IDs such as: orderId, restaurantId, addressId, spinId, menu_item_id, couponCode, query, cartId, slotId, paymentMethod, guestCount, itemId \u2014 whichever were part of the request that failed.",
+              "additionalProperties": {
+                "type": "string"
+              }
+            },
+            "userNotes": {
+              "type": "string",
+              "description": "Any additional notes or context the user wants to share"
+            }
+          },
+          "required": [
+            "tool",
+            "errorMessage"
+          ]
+        },
+        "annotations": {
+          "title": "Report Error",
+          "readOnlyHint": false,
+          "destructiveHint": false,
+          "idempotentHint": true,
+          "openWorldHint": false
+        }
+      },
+      {
+        "name": "get_payment_options",
+        "description": "Fetch live payment options for the current cart. The live list will not include UPI methods if the user isn't yet eligible for UPI payments, or if UPI is temporarily unavailable for this business line.\n\nA single call fetches BOTH device surfaces (mobile UPI apps + desktop scan-QR) and merges them. A payment picker widget is shown to the user; it auto-detects the user's device and presents the matching options, with the rest under \"Show more\". You do NOT need to ask the user which device they're on \u2014 the widget handles that.\n\nWHEN TO CALL:\n- ALWAYS call this when the user is ready to pay \u2014 it renders the picker. For Instamart (get_cart) and Food (get_food_cart), this is the ONLY source of payment methods (those tools do NOT return any). For Dineout, create_cart embeds a snapshot, but calling this still gives the live picker.\n- The user explicitly asks \"what payment options are available?\" / wants UPI / mentions GPay, PhonePe, Paytm, etc.\n\nINPUTS: cart context is resolved server-side from the per-request cache; LLM-supplied cart args are ignored.\n\nOUTPUT (data):\n- platforms.mobile.methods[] \u2014 UPI apps (intent). Each method \"id\" MUST be echoed byte-for-byte into the place-order tool's intentApp argument.\n- platforms.desktop.methods[] \u2014 desktop scan-QR (use generateUPIQR=true on place-order; no intentApp).\n- cod \u2014 Cash on Delivery, when available (paymentMethod=\"Cash\").\n- allMethods[] \u2014 flat list across surfaces (fallback for text rendering).\n- markdown via message \u2014 human-readable list.\n- If UPI is unavailable for this user, the UPI platforms field is omitted. Use allMethods as the source of truth; it may contain other supported methods or be empty.\n\n\u26a0\ufe0f UPI Collect requests (pull-based, incl. flows that would auto-trigger via a saved VPA) are intentionally not surfaced \u2014 NPCI has phased these out for P2M transactions.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "cartAmount": {
+              "type": "number",
+              "description": "Deprecated. Ignored \u2014 server reads amount from the live response."
+            },
+            "addressId": {
+              "type": "string",
+              "description": "Food only: pass the same addressId you used for get_food_cart. It is echoed back so the payment picker widget can place the order directly. Recommended for Food UPI."
+            }
+          }
+        },
+        "annotations": {
+          "title": "Get Payment Options",
+          "readOnlyHint": true,
+          "destructiveHint": false,
+          "idempotentHint": true,
+          "openWorldHint": false
+        },
+        "_meta": {
+          "ui": {
+            "resourceUri": "ui://widget/dineout-payment.html"
+          }
+        }
+      },
+      {
+        "name": "check_payment_status",
+        "description": "Check status of an in-flight UPI payment (one status read).\n\n\u26a0\ufe0f THE PAYMENT WIDGET POLLS AUTOMATICALLY. After place_order, the confirmation widget\nchecks payment status on a fixed cadence and AUTO-CALLS confirm_order on success. So you\nnormally do NOT need to call this at all. Do NOT call it in a tight loop \u2014 it returns\ninstantly, so looping spams the endpoint (the bug we just fixed).\n\nWHEN TO CALL (at most ONCE per user request):\n- The user explicitly asks \"did my payment go through?\" / \"check status\" \u2192 call ONCE and report the result. Do NOT immediately re-call on PENDING.\n- If the result is terminal SUCCESS / PAID \u2192 call confirm_order to finalize.\n- If terminal FAILED \u2192 DO NOT call confirm_order; tell the user it failed and offer get_payment_options to retry.\n- If terminal REFUND-INITIATED \u2192 DO NOT call confirm_order; tell the user a refund was initiated.\n- If PENDING \u2192 tell the user it's still processing and that it will update automatically. Do NOT loop.\n\nThe widget handles the cadence + the wall-clock cap and cues you if anything needs your attention.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "paasId": {
+              "type": "string",
+              "description": "The payment TRANSACTION id from the place-order/checkout response (response field \"paasId\", e.g. a long numeric/alphanumeric id). NOT the payment-method name \u2014 never pass \"PayWithQR\", \"UPI\", \"UPIIntent\", or an app package id here. If you do not have a real paasId, do not call this tool; re-read the checkout response which contains paasId + orderId."
+            },
+            "orderId": {
+              "type": "string",
+              "description": "orderId from the place-order/checkout response. IM: pass it so the widget can auto-confirm on SUCCESS. Food: echo from place_food_order."
+            },
+            "addressId": {
+              "type": "string",
+              "description": "Food only: echo from place_food_order \u2014 passed through for auto-confirm."
+            },
+            "cartId": {
+              "type": "string",
+              "description": "Food only: echo from place_food_order \u2014 passed through for auto-confirm."
+            },
+            "lat": {
+              "type": "number",
+              "description": "Food only: echo from place_food_order \u2014 passed through for auto-confirm."
+            },
+            "lng": {
+              "type": "number",
+              "description": "Food only: echo from place_food_order \u2014 passed through for auto-confirm."
+            },
+            "finalize": {
+              "type": "boolean",
+              "description": "INTERNAL \u2014 set by the widget at the 5-min polling cap to finalize the order (confirm) even if still pending. Do NOT set this yourself."
+            }
+          },
+          "required": [
+            "paasId"
+          ]
+        },
+        "annotations": {
+          "title": "Check Payment Status",
+          "readOnlyHint": true,
+          "destructiveHint": false,
+          "idempotentHint": true,
+          "openWorldHint": false
+        }
+      },
+      {
+        "name": "confirm_order",
+        "description": "Finalize a pre-PLACED order to PLACED state. ALWAYS called on every terminal polling exit \u2014 SUCCESS finalises, FAILED/TIMEOUT marks the order failed so it doesn't linger in PENDING_PAYMENT forever.\n\nWHEN TO CALL:\n- \u2705 Fire once on first SUCCESS / PAID poll from check_payment_status \u2192 finalises the order to PLACED.\n- \u23f1\ufe0f Fire at wall-clock expiry (still PENDING) \u2192 backend marks the order failed because payment is still non-terminal at PaaS. User sees \"Payment timed out \u2014 retry?\". Delayed payment-service success is recovered async.\n- \u274c DO NOT fire on FAILED. On FAILED the user must start a fresh payment attempt \u2014 call get_payment_options to re-show the picker; place_order with the new selection creates a fresh transaction on the same cart.\n- \u274c DO NOT fire on REFUND-INITIATED \u2014 refund flow is already in motion.\n- Idempotent: safe to retry on transient failure.\n\nPER-DOMAIN ARGS:\n- IM + Dineout: pass orderId + paasId (paasId is the canonical payment-transaction reference).\n- Food: pass orderId + addressId + lat + lng (cartId optional). Echo all of these from place_food_order's response. paasId is not used by Food's confirm contract.\n\nFor UPI flows the order is created in PENDING_PAYMENT state by place_order and only transitions to PLACED (or FAILED) here.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "orderId": {
+              "type": "string",
+              "description": "Order ID returned by the place-order tool."
+            },
+            "transactionId": {
+              "type": "string",
+              "description": "Transaction ID returned by the place-order tool (IM/Dineout only)."
+            },
+            "paasId": {
+              "type": "string",
+              "description": "Payment transaction ID returned by the place-order tool (IM/Dineout only)."
+            },
+            "addressId": {
+              "type": "string",
+              "description": "Address ID \u2014 REQUIRED for Food. Echo from place_food_order response."
+            },
+            "cartId": {
+              "type": "string",
+              "description": "Cart ID \u2014 optional but recommended for Food. Echo from place_food_order response."
+            },
+            "lat": {
+              "type": "number",
+              "description": "Latitude \u2014 REQUIRED for Food. Echo from place_food_order response."
+            },
+            "lng": {
+              "type": "number",
+              "description": "Longitude \u2014 REQUIRED for Food. Echo from place_food_order response."
+            }
+          },
+          "required": [
+            "orderId"
+          ]
+        },
+        "annotations": {
+          "title": "Confirm Order",
+          "readOnlyHint": false,
+          "destructiveHint": false,
+          "idempotentHint": true,
+          "openWorldHint": true
+        }
+      }
+    ]
+  },
+  "jsonrpc": "2.0",
+  "id": 1
+}

@@ -271,11 +271,10 @@ async def swiggy_oauth_callback(
     
     cb_state_hash = hashlib.sha256(state.encode('utf-8')).hexdigest()[:12] if state else "none"
     engine_url = str(get_engine().url)
-    logger.info(f"OAuth callback STATE:")
-    logger.info(f"  callback_state_hash={cb_state_hash}")
-    logger.info(f"  callback_state_length={len(state) if state else 0}")
-    logger.info(f"  engine_url={engine_url}")
-    logger.info(f"  current_time={datetime.now(timezone.utc)}")
+    logger.info(
+        "OAuth callback RECEIVED: callback_state_hash=%s callback_state_length=%s",
+        cb_state_hash, len(state) if state else 0
+    )
     
     if error:
         logger.error(f"OAuth error received: {error} - {error_description}")
@@ -289,6 +288,14 @@ async def swiggy_oauth_callback(
     
     # Validate State
     oauth_state = session.exec(select(OAuthState).where(OAuthState.state == state)).first()
+    
+    logger.info(
+        "OAuth callback LOOKUP: state_found=%s hash=%s db_path=%s total_states=%s",
+        bool(oauth_state),
+        cb_state_hash,
+        engine_url,
+        len(session.exec(select(OAuthState)).all())
+    )
     
     if not oauth_state:
         logger.error(f"OAuth callback failed: Invalid state (hash={cb_state_hash})")
@@ -324,6 +331,7 @@ async def swiggy_oauth_callback(
             "code": code,
             "redirect_uri": redirect_uri,
             "code_verifier": code_verifier,
+            "scope": "mcp:tools"
         }
             
         async with httpx.AsyncClient() as client:
@@ -335,6 +343,8 @@ async def swiggy_oauth_callback(
                 
                 token_data = resp.json()
                 access_token = token_data.get("access_token")
+                if access_token:
+                    access_token = access_token.strip()
                 expires_in = token_data.get("expires_in", 3600)
                 
                 if not access_token:
@@ -370,6 +380,17 @@ async def swiggy_oauth_callback(
             conn.expires_at = expires_at
             conn.updated_at = datetime.now(timezone.utc)
             session.add(conn)
+            
+        logger.info(
+            "TOKEN SAVED: token_exists=%s expires_in=%s expires_at=%s current_utc=%s seconds_until_expiry=%s user_id=%s status=%s",
+            bool(access_token),
+            expires_in,
+            conn.expires_at,
+            datetime.now(timezone.utc),
+            (conn.expires_at.replace(tzinfo=timezone.utc) - datetime.now(timezone.utc)).total_seconds() if conn.expires_at else 0,
+            conn.user_id,
+            conn.status
+        )
     
         session.commit()
     finally:

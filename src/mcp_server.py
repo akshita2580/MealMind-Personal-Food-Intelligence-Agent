@@ -43,20 +43,48 @@ mcp = FastMCP(
 # -----------------------------------------------------------------------
 
 @mcp.tool()
-def sync_orders(cookies: str, max_orders: int = 1000, user_id: int | None = None) -> str:
+def sync_orders(*, user_id: int) -> str:
     """
     Fetch orders from the Swiggy API and store them in the local database.
 
     Args:
-        cookies: Swiggy session cookies (required, runtime-only).
-        max_orders: Maximum orders to fetch (default 1000).
         user_id: The authenticated user ID
 
     Returns:
         Markdown summary of the sync result.
     """
+    from .models import SwiggyConnection
+    from .security import decrypt_token
+    from . import swiggy_mcp_client
+    from sqlmodel import select
+
     try:
-        raw_orders = _run_async(fetcher.sync_orders, cookies, max_orders=max_orders)
+        with _session_scope() as session:
+            conn = session.exec(select(SwiggyConnection).where(SwiggyConnection.user_id == user_id)).first()
+            if not conn or conn.status != "CONNECTED" or not conn.access_token:
+                return _format_error("Sync Failed", "No valid Swiggy connection found. Please connect your account first.")
+                
+            access_token = decrypt_token(conn.access_token)
+            
+        # Get addresses
+        addresses = _run_async(swiggy_mcp_client.get_addresses, access_token)
+        if not addresses:
+            return _format_error("Sync Failed", "No supported Swiggy data is currently available (no addresses found).")
+            
+        address_id = None
+        for addr in addresses:
+            if isinstance(addr, dict):
+                address_id = addr.get("id") or addr.get("addressId") or addr.get("address_id")
+                if address_id:
+                    break
+                    
+        if not address_id:
+            return _format_error("Sync Failed", "No supported Swiggy data is currently available (no address ID).")
+            
+        # Get orders
+        raw_orders = _run_async(swiggy_mcp_client.get_food_orders, access_token, str(address_id))
+        if not raw_orders:
+            return _format_error("Sync Failed", "No supported Swiggy data is currently available (no orders found).")
 
         with _session_scope() as session:
             new_count = repository.upsert_orders(raw_orders, session, user_id=user_id)
@@ -70,14 +98,11 @@ def sync_orders(cookies: str, max_orders: int = 1000, user_id: int | None = None
             f"**Date Coverage**: {result.date_coverage}\n\n"
             "Your Swiggy order data has been synchronised successfully!"
         )
-    except fetcher.AuthenticationError as exc:
-        logger.warning("Swiggy authentication failed during MCP sync: %s", exc.message)
-        return _format_error("Authentication Error", exc.message)
-    except fetcher.SwiggyAPIError as exc:
-        logger.warning("Swiggy API failed during MCP sync: %s", exc.message)
-        return _format_error("Sync Failed", f"Failed to fetch from Swiggy API: {exc.message}")
     except Exception as exc:
         logger.exception("Unexpected MCP sync error: %s", type(exc).__name__)
+        err_msg = str(exc).lower()
+        if "http 401" in err_msg or "http 419" in err_msg:
+            return _format_error("Authentication Error", "Your Swiggy connection was rejected (HTTP 401). Please reconnect.")
         return _format_error("Sync Failed", "An unexpected error occurred while syncing orders.")
 
 
@@ -91,7 +116,8 @@ def get_orders(
     end_date: str | None = None,
     restaurant_name: str | None = None,
     limit: int = 50,
-    user_id: int | None = None,
+    *,
+    user_id: int,
 ) -> str:
     """
     Retrieve orders from local storage with optional filters.
@@ -117,7 +143,7 @@ def get_orders(
             )
             
             if not orders:
-                return "No real Swiggy orders are available yet. Please sync your orders."
+                return "No real Swiggy order data is currently available."
                 
             total_spent = sum(o.order_total for o in orders)
             lines = _format_order_list(orders)
@@ -144,7 +170,8 @@ def get_restaurants(
     start_date: str | None = None,
     end_date: str | None = None,
     min_orders: int = 1,
-    user_id: int | None = None,
+    *,
+    user_id: int,
 ) -> str:
     """
     List all restaurants with order counts and spending stats.
@@ -162,7 +189,7 @@ def get_restaurants(
             restaurants = repository.get_restaurants(session, user_id=user_id, start_date=start_date, end_date=end_date, min_orders=min_orders)
             
             if not restaurants:
-                return "No real Swiggy orders are available yet. Please sync your orders."
+                return "No real Swiggy order data is currently available."
 
             lines: list[str] = []
             for i, r in enumerate(restaurants, 1):
@@ -188,24 +215,6 @@ def get_restaurants(
         logger.exception("MCP get_restaurants failed: %s", type(exc).__name__)
         return _format_error("Restaurant Query Failed", "Unable to retrieve restaurants right now.")
 
-        cuisines = ", ".join(r.cuisines[:3]) + ("…" if len(r.cuisines) > 3 else "")
-        localities = ", ".join(r.localities[:2]) + ("…" if len(r.localities) > 2 else "")
-        lines.append(
-            f"{i}. **{r.name}**\n"
-            f"   📊 {r.order_count} orders • ₹{r.total_spent} total • ₹{r.avg_order_value} avg\n"
-            f"   🍽️ {cuisines}\n"
-            f"   📍 {localities}\n"
-            f"   📅 {r.first_order} → {r.last_order}\n"
-        )
-
-    return (
-        f"# Restaurants List\n\n"
-        f"**Total Restaurants**: {len(restaurants)}\n"
-        f"**Minimum Orders**: {min_orders}\n"
-        f"**Date Range**: {start_date or 'All'} to {end_date or 'All'}\n\n"
-        f"## Restaurants (sorted by order count)\n\n"
-        + "\n".join(lines)
-    )
 
 
 # -----------------------------------------------------------------------
@@ -217,7 +226,8 @@ def get_analytics(
     start_date: str | None = None,
     end_date: str | None = None,
     analysis_type: str = "summary",
-    user_id: int | None = None,
+    *,
+    user_id: int,
 ) -> str:
     """
     Generate analytics from your stored Swiggy orders.
@@ -241,7 +251,7 @@ def get_analytics(
             )
             
             if result.summary.total_orders == 0:
-                return "No real Swiggy orders are available yet. Please sync your orders."
+                return "No real Swiggy order data is currently available."
     except Exception as exc:
         logger.exception("MCP get_analytics failed: %s", type(exc).__name__)
         return _format_error("Analytics Failed", "Unable to generate analytics right now.")
@@ -300,7 +310,8 @@ def get_analytics(
 def search_orders(
     query: str,
     limit: int = 20,
-    user_id: int | None = None,
+    *,
+    user_id: int,
 ) -> str:
     """
     Search orders by restaurant name, cuisine, location, or item name.
@@ -338,7 +349,8 @@ def get_food_insights(
     period: str | None = None,
     start_date: str | None = None,
     end_date: str | None = None,
-    user_id: int | None = None,
+    *,
+    user_id: int,
 ) -> str:
     """
     Generate personalized food intelligence insights from your order history.
@@ -374,7 +386,7 @@ def get_food_insights(
     period_label = response.period.get("label") or f"{start_date or 'All'} to {end_date or 'All'}"
 
     if response.total_orders == 0:
-        return "No real Swiggy orders are available yet. Please sync your orders."
+        return "No real Swiggy order data is currently available."
 
     if not insights:
         return (
@@ -499,12 +511,14 @@ def _format_order_list(orders: list[Order]) -> str:
     parts: list[str] = []
     for i, o in enumerate(orders, 1):
         cuisines = o.cuisine_list
+        item_names = [f"{item.quantity}x {item.name}" for item in o.items] if o.items else []
+        items_str = ", ".join(item_names) if item_names else "Unknown"
         parts.append(
             f"{i}. **{o.restaurant_name or 'Unknown'}**\n"
-            f"   📅 {o.order_time.strftime('%Y-%m-%d %H:%M') if o.order_time else 'Unknown'}\n"
+            f"   📅 {o.order_time.strftime('%b %d %Y, %H:%M') if o.order_time else 'Unknown'}\n"
             f"   💰 ₹{o.order_total}\n"
-            f"   📍 {o.restaurant_locality or 'Unknown'}\n"
-            f"   🍽️ {', '.join(cuisines) if cuisines else 'Unknown'}\n"
+            f"   📍 {o.restaurant_locality or o.restaurant_city or 'Unknown'}\n"
+            f"   📦 {items_str}\n"
         )
     return "\n".join(parts) if parts else "*No orders found.*"
 

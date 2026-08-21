@@ -86,7 +86,7 @@ def _seed_baseline_orders(session: Session) -> None:
                 discount=25.0 if idx <= 5 else 0.0,
             )
         )
-    upsert_orders(orders, session)
+    upsert_orders(orders, session, user_id=1)
 
 
 def _types(insights) -> set[str]:
@@ -94,7 +94,7 @@ def _types(insights) -> set[str]:
 
 
 def test_empty_database_returns_insufficient_data(session: Session) -> None:
-    insights = generate_food_insights(session)
+    insights = generate_food_insights(session, user_id=1)
 
     assert len(insights) == 1
     assert insights[0].type == "INSUFFICIENT_DATA"
@@ -106,9 +106,9 @@ def test_insufficient_data_threshold(session: Session) -> None:
         _raw_order(idx, when=f"2024-01-0{idx} 12:00:00")
         for idx in range(1, DataThresholds.MIN_ORDERS_FOR_PATTERNS)
     ]
-    upsert_orders(orders, session)
+    upsert_orders(orders, session, user_id=1)
 
-    insights = generate_food_insights(session)
+    insights = generate_food_insights(session, user_id=1)
 
     assert len(insights) == 1
     assert insights[0].type == "INSUFFICIENT_DATA"
@@ -118,7 +118,7 @@ def test_insufficient_data_threshold(session: Session) -> None:
 def test_spending_trend_and_date_filtering(session: Session) -> None:
     _seed_baseline_orders(session)
 
-    all_insights = generate_food_insights(session)
+    all_insights = generate_food_insights(session, user_id=1)
     assert "SPENDING_TREND" in _types(all_insights)
 
     trend = next(insight for insight in all_insights if insight.type == "SPENDING_TREND")
@@ -144,7 +144,7 @@ def test_spending_trend_and_date_filtering(session: Session) -> None:
 def test_restaurant_preference(session: Session) -> None:
     _seed_baseline_orders(session)
 
-    insights = generate_food_insights(session)
+    insights = generate_food_insights(session, user_id=1)
     favorite = next(insight for insight in insights if insight.type == "FAVORITE_RESTAURANT")
 
     assert favorite.supporting_data["restaurant"] == "Domino's"
@@ -166,9 +166,9 @@ def test_cuisine_preference_and_trend(session: Session) -> None:
                 cuisines=["Pizza"] if not is_february else ["Chinese"],
             )
         )
-    upsert_orders(orders, session)
+    upsert_orders(orders, session, user_id=1)
 
-    insights = generate_food_insights(session)
+    insights = generate_food_insights(session, user_id=1)
 
     assert "FAVORITE_CUISINE" in _types(insights)
     trend = next(insight for insight in insights if insight.type == "CUISINE_TREND")
@@ -182,9 +182,9 @@ def test_ordering_time_behavior(session: Session) -> None:
         _raw_order(idx, when=f"2024-01-{idx:02d} 13:00:00")
         for idx in range(1, 15)
     ]
-    upsert_orders(orders, session)
+    upsert_orders(orders, session, user_id=1)
 
-    insights = generate_food_insights(session)
+    insights = generate_food_insights(session, user_id=1)
 
     common_hour = next(insight for insight in insights if insight.type == "COMMON_HOUR")
     meal_time = next(insight for insight in insights if insight.type == "MEAL_TIME_DISTRIBUTION")
@@ -197,7 +197,7 @@ def test_ordering_time_behavior(session: Session) -> None:
 def test_repeat_items_and_natural_period_resolution(session: Session) -> None:
     _seed_baseline_orders(session)
 
-    insights = generate_food_insights(session)
+    insights = generate_food_insights(session, user_id=1)
     favorite_item = next(insight for insight in insights if insight.type == "FAVORITE_ITEMS")
 
     assert favorite_item.supporting_data["item_name"] == "chicken biryani"

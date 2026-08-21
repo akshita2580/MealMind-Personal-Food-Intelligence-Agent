@@ -70,5 +70,5 @@ def generate_pkce_challenge(verifier: str) -> str:
     return base64.urlsafe_b64encode(digest).decode('ascii').rstrip('=')
 
 def generate_oauth_state() -> str:
-    """Generate a cryptographically random OAuth state."""
-    return secrets.token_urlsafe(32)
+    """Generate a cryptographically random OAuth state using hex (32 chars) to prevent encoding or truncation issues."""
+    return secrets.token_hex(16)
