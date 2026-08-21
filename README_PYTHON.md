@@ -76,7 +76,6 @@ This is a **learning project and resume piece**, not a production fork. The goal
 🚧 **Work in Progress** — This is a resume/portfolio project under active development.
 
 **Completed:**
-- [ ] License and attribution
 - [ ] Python project structure
 - [ ] Pydantic models
 - [ ] SQLite schema design

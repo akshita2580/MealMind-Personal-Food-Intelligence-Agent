@@ -6,7 +6,6 @@ authors = [
     {name = "Swiggy MCP Server Team"}
 ]
 requires-python = ">=3.10"
-license = {text = "MIT"}
 dependencies = [
     "fastapi>=0.115.0",
     "fastmcp>=2.0.0",
