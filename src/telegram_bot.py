@@ -73,6 +73,30 @@ def get_user_access_token(telegram_id: str) -> str | None:
         return decrypt_token(conn.access_token)
 
 
+def escape_md(text: str) -> str:
+    """
+    Escape Markdown special characters for Telegram messages.
+    Escapes: _, *, [, ], (, ), ~, `, >, #, +, -, =, |, {, }, ., !
+    """
+    if text is None:
+        return ""
+    escape_chars = set(r"_*[]()~`>#+-=|{}.!")
+    return "".join(f"\\{c}" if c in escape_chars else c for c in str(text))
+
+
+async def _safe_reply_md(target, text: str, **kwargs):
+    """Send text with Markdown formatting, falling back to plain text if Markdown entity parsing fails."""
+    try:
+        return await target.reply_text(text, parse_mode="Markdown", **kwargs)
+    except Exception as exc:
+        if "can't parse entities" in str(exc).lower():
+            logger.warning("Markdown parse error, falling back to plain text: %s", exc)
+            kwargs_copy = kwargs.copy()
+            kwargs_copy.pop("parse_mode", None)
+            return await target.reply_text(text, **kwargs_copy)
+        raise
+
+
 # -------------------------------------------------------------------------
 # Helper: Build OAuth URL (reused by /start and /sync)
 # -------------------------------------------------------------------------
@@ -412,7 +436,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         "💡 **Tip**: Use the button menu from /start for quick access!"
     )
 
-    await update.message.reply_text(help_text, parse_mode="Markdown")
+    await _safe_reply_md(update.message, help_text)
 
 
 # -------------------------------------------------------------------------
@@ -437,8 +461,8 @@ async def insights_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     await update.message.reply_text("🔄 Generating insights...")
 
     try:
-        result = get_food_insights(user_id=user_id)
-        await update.message.reply_text(result, parse_mode="Markdown")
+        result = await get_food_insights(user_id=user_id)
+        await _safe_reply_md(update.message, result)
     except Exception as e:
         logger.exception("Failed to generate insights")
         await update.message.reply_text("❌ Failed to generate insights. Please try again later.")
@@ -465,8 +489,8 @@ async def orders_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     await update.message.reply_text("🔄 Fetching orders...")
 
     try:
-        result = get_orders(limit=50, user_id=user_id)
-        await update.message.reply_text(result, parse_mode="Markdown")
+        result = await get_orders(limit=50, user_id=user_id)
+        await _safe_reply_md(update.message, result)
     except Exception as e:
         logger.exception("Failed to fetch orders")
         await update.message.reply_text("❌ Failed to fetch orders. Please try again later.")
@@ -493,8 +517,8 @@ async def restaurants_command(update: Update, context: ContextTypes.DEFAULT_TYPE
     await update.message.reply_text("🔄 Fetching restaurants...")
 
     try:
-        result = get_restaurants(user_id=user_id)
-        await update.message.reply_text(result, parse_mode="Markdown")
+        result = await get_restaurants(user_id=user_id)
+        await _safe_reply_md(update.message, result)
     except Exception as e:
         logger.exception("Failed to fetch restaurants")
         await update.message.reply_text("❌ Failed to fetch restaurants. Please try again later.")
@@ -521,8 +545,8 @@ async def analytics_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     await update.message.reply_text("🔄 Generating analytics...")
 
     try:
-        result = get_analytics(user_id=user_id)
-        await update.message.reply_text(result, parse_mode="Markdown")
+        result = await get_analytics(user_id=user_id)
+        await _safe_reply_md(update.message, result)
     except Exception as e:
         logger.exception("Failed to generate analytics")
         await update.message.reply_text("❌ Failed to generate analytics. Please try again later.")
@@ -556,11 +580,11 @@ async def search_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     from .mcp_server import search_orders
 
     user_id = get_user_id(telegram_id)
-    await update.message.reply_text(f"🔄 Searching for '{query}'...")
+    await update.message.reply_text(f"🔄 Searching for '{escape_md(query)}'...")
 
     try:
-        result = search_orders(query=query, user_id=user_id)
-        await update.message.reply_text(result, parse_mode="Markdown")
+        result = await search_orders(query=query, user_id=user_id)
+        await _safe_reply_md(update.message, result)
     except Exception as e:
         logger.exception("Failed to search orders")
         await update.message.reply_text("❌ Failed to search orders. Please try again later.")
@@ -608,10 +632,10 @@ async def sync_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         if auth_url:
             keyboard = [[InlineKeyboardButton("Reconnect Swiggy", url=auth_url)]]
             reply_markup = InlineKeyboardMarkup(keyboard)
-            await update.message.reply_text(result, reply_markup=reply_markup, parse_mode="Markdown")
+            await _safe_reply_md(update.message, result, reply_markup=reply_markup)
             return
             
-    await update.message.reply_text(result, parse_mode="Markdown")
+    await _safe_reply_md(update.message, result)
 
 
 # -------------------------------------------------------------------------
@@ -645,29 +669,30 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         if query.data == "insights":
             from .mcp_server import get_food_insights
             await query.message.reply_text("🔄 Generating insights...")
-            result = get_food_insights(user_id=user_id)
-            await query.message.reply_text(result, parse_mode="Markdown")
+            result = await get_food_insights(user_id=user_id)
+            await _safe_reply_md(query.message, result)
 
         elif query.data == "orders":
             from .mcp_server import get_orders
             await query.message.reply_text("🔄 Fetching orders...")
-            result = get_orders(limit=50, user_id=user_id)
-            await query.message.reply_text(result, parse_mode="Markdown")
+            result = await get_orders(limit=50, user_id=user_id)
+            await _safe_reply_md(query.message, result)
 
         elif query.data == "restaurants":
             from .mcp_server import get_restaurants
             await query.message.reply_text("🔄 Fetching restaurants...")
-            result = get_restaurants(user_id=user_id)
-            await query.message.reply_text(result, parse_mode="Markdown")
+            result = await get_restaurants(user_id=user_id)
+            await _safe_reply_md(query.message, result)
 
         elif query.data == "analytics":
             from .mcp_server import get_analytics
             await query.message.reply_text("🔄 Generating analytics...")
-            result = get_analytics(user_id=user_id)
-            await query.message.reply_text(result, parse_mode="Markdown")
+            result = await get_analytics(user_id=user_id)
+            await _safe_reply_md(query.message, result)
 
         elif query.data == "search":
-            await query.message.reply_text(
+            await _safe_reply_md(
+                query.message,
                 "🔎 **Search Orders**\n\n"
                 "To search your orders, use the command:\n"
                 "`/search <query>`\n\n"
@@ -675,8 +700,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                 "• `/search pizza`\n"
                 "• `/search biryani`\n"
                 "• `/search Dominos`\n"
-                "• `/search Indiranagar`",
-                parse_mode="Markdown"
+                "• `/search Indiranagar`"
             )
 
         elif query.data == "sync":
@@ -703,10 +727,10 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                     if auth_url:
                         keyboard = [[InlineKeyboardButton("Reconnect Swiggy", url=auth_url)]]
                         reply_markup = InlineKeyboardMarkup(keyboard)
-                        await query.message.reply_text(result, reply_markup=reply_markup, parse_mode="Markdown")
+                        await _safe_reply_md(query.message, result, reply_markup=reply_markup)
                         return
                         
-                await query.message.reply_text(result, parse_mode="Markdown")
+                await _safe_reply_md(query.message, result)
 
         elif query.data == "help":
             help_text = (
@@ -721,7 +745,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                 "🔹 **/sync** - Sync your Swiggy orders\n\n"
                 "💡 **Tip**: Use the button menu from /start for quick access!"
             )
-            await query.message.reply_text(help_text, parse_mode="Markdown")
+            await _safe_reply_md(query.message, help_text)
 
     except Exception as e:
         logger.exception(f"Failed to handle button callback: {query.data}")

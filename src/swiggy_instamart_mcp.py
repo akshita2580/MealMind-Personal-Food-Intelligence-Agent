@@ -1,6 +1,6 @@
 import logging
 from typing import Any
-from src.mcp_transport import mcp_call, extract_mcp_result
+from .mcp_transport import mcp_call, extract_mcp_result
 
 logger = logging.getLogger(__name__)
 

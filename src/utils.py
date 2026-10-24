@@ -10,7 +10,7 @@ from typing import Any
 
 from pydantic import ValidationError
 
-from src.models import OrderOut
+from .models import OrderOut
 
 
 def pretty_print_order(order: OrderOut) -> str:

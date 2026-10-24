@@ -105,7 +105,20 @@ def upsert_orders(raw_orders: list[dict[str, Any]], session: Session, *, user_id
     new_count = 0
     
     for raw in raw_orders:
-        oid = str(raw.get("order_id", ""))
+        if not isinstance(raw, dict):
+            continue
+
+        # Swiggy MCP returns camelCase fields, while the REST history fetcher
+        # uses snake_case. Normalize aliases here so every import path stores
+        # the same data and orderId records are not silently discarded.
+        def value(*keys: str, default: Any = None) -> Any:
+            for key in keys:
+                candidate = raw.get(key)
+                if candidate is not None and candidate != "":
+                    return candidate
+            return default
+
+        oid = str(value("order_id", "orderId", "id", default=""))
         if not oid:
             continue
 
@@ -114,32 +127,63 @@ def upsert_orders(raw_orders: list[dict[str, Any]], session: Session, *, user_id
         is_new = existing is None
 
         # Parse order_time
-        order_time_str = raw.get("order_time", "")
+        order_time_str = value("order_time", "orderedTime", "orderTime", "created_at", default="")
         order_time = _parse_order_time(order_time_str)
         if not order_time and order_time_str:
             logger.warning(f"Failed to parse order_time: {order_time_str} for order {oid}")
 
         # Parse cuisines list
-        cuisines = raw.get("restaurant_cuisine") or []
+        cuisines = value("restaurant_cuisine", "cuisines", default=[]) or []
+        if isinstance(cuisines, str):
+            cuisines = [part.strip() for part in cuisines.split(",") if part.strip()]
+        if not isinstance(cuisines, list):
+            cuisines = []
+
+        delivery_address = value("delivery_address", "deliveryAddress", default={}) or {}
+        if not isinstance(delivery_address, dict):
+            delivery_address = {"address": str(delivery_address)}
+
+        restaurant_id = str(value("restaurant_id", "restaurantId", default=""))
+        restaurant_name = value("restaurant_name", "restaurantName", default="")
+        restaurant_locality = value(
+            "restaurant_locality", "restaurantLocality", "restaurantAreaName", default=""
+        )
+        restaurant_city = value("restaurant_city_name", "restaurantCity", default="")
+        order_total = _parse_currency(value("order_total", "orderTotal", "totalAmount", default=0))
+        order_status = value("order_status", "orderStatus", default="Delivered")
+        payment_method = value("payment_method", "paymentMethod", default="")
+        order_discount = _parse_currency(value("order_discount", "discount", default=0))
+        delivery_charge = _parse_currency(
+            value("order_delivery_charge", "deliveryCharge", default=0)
+        )
+        gst = _parse_currency(value("order_tax", "gst", default=0))
+        raw_items = value("order_items", "orderItems", "items", default=[]) or []
+        if not raw_items:
+            for action in raw.get("actions", []) or []:
+                if isinstance(action, dict) and action.get("type") == "PAST_ORDER_CTA_ENUM_REORDER":
+                    raw_items = (action.get("reorderMeta") or {}).get("orderItems", [])
+                    break
+        if not isinstance(raw_items, list):
+            raw_items = []
         
         # Create or update order
         if is_new:
             order = Order(
                 order_id=oid,
                 user_id=user_id,  # Associate with user
-                restaurant_id=str(raw.get("restaurant_id", "")),
-                restaurant_name=raw.get("restaurant_name", ""),
-                restaurant_locality=raw.get("restaurant_locality", ""),
-                restaurant_city=raw.get("restaurant_city_name", ""),
+                restaurant_id=restaurant_id,
+                restaurant_name=restaurant_name,
+                restaurant_locality=restaurant_locality,
+                restaurant_city=restaurant_city,
                 restaurant_cuisines=", ".join(cuisines),  # Keep denormalized for convenience
                 order_time=order_time,
-                order_total=_parse_currency(raw.get("order_total")),
-                order_status=raw.get("order_status", "Delivered"),
-                payment_method=raw.get("payment_method", ""),
-                delivery_address=raw.get("delivery_address", {}).get("address", ""),
-                order_discount=_parse_currency(raw.get("order_discount")),
-                delivery_charge=_parse_currency(raw.get("order_delivery_charge")),
-                gst=_parse_currency(raw.get("order_tax")),
+                order_total=order_total,
+                order_status=order_status,
+                payment_method=payment_method,
+                delivery_address=delivery_address.get("address", ""),
+                order_discount=order_discount,
+                delivery_charge=delivery_charge,
+                gst=gst,
                 raw_json=json.dumps(raw),
             )
             session.add(order)
@@ -151,19 +195,19 @@ def upsert_orders(raw_orders: list[dict[str, Any]], session: Session, *, user_id
                 if existing.user_id is not None and existing.user_id != user_id:
                     continue # Skip modifying this order
                 existing.user_id = user_id  # Update owner if it was null or already matched
-            existing.restaurant_id = str(raw.get("restaurant_id", ""))
-            existing.restaurant_name = raw.get("restaurant_name", "")
-            existing.restaurant_locality = raw.get("restaurant_locality", "")
-            existing.restaurant_city = raw.get("restaurant_city_name", "")
+            existing.restaurant_id = restaurant_id
+            existing.restaurant_name = restaurant_name
+            existing.restaurant_locality = restaurant_locality
+            existing.restaurant_city = restaurant_city
             existing.restaurant_cuisines = ", ".join(cuisines)
             existing.order_time = order_time
-            existing.order_total = _parse_currency(raw.get("order_total"))
-            existing.order_status = raw.get("order_status", "Delivered")
-            existing.payment_method = raw.get("payment_method", "")
-            existing.delivery_address = raw.get("delivery_address", {}).get("address", "")
-            existing.order_discount = _parse_currency(raw.get("order_discount"))
-            existing.delivery_charge = _parse_currency(raw.get("order_delivery_charge"))
-            existing.gst = _parse_currency(raw.get("order_tax"))
+            existing.order_total = order_total
+            existing.order_status = order_status
+            existing.payment_method = payment_method
+            existing.delivery_address = delivery_address.get("address", "")
+            existing.order_discount = order_discount
+            existing.delivery_charge = delivery_charge
+            existing.gst = gst
             existing.raw_json = json.dumps(raw)
             session.add(existing)
 
@@ -188,7 +232,9 @@ def upsert_orders(raw_orders: list[dict[str, Any]], session: Session, *, user_id
         # Handle order items
         if is_new:
             # For new orders, insert all items
-            for item_raw in raw.get("order_items") or []:
+            for item_raw in raw_items:
+                if not isinstance(item_raw, dict):
+                    continue
                 item = OrderItem(
                     order_id=oid,
                     item_id=str(item_raw.get("item_id") or item_raw.get("itemId") or ""),
@@ -205,7 +251,9 @@ def upsert_orders(raw_orders: list[dict[str, Any]], session: Session, *, user_id
             for old_item in old_items:
                 session.delete(old_item)
             
-            for item_raw in raw.get("order_items") or []:
+            for item_raw in raw_items:
+                if not isinstance(item_raw, dict):
+                    continue
                 item = OrderItem(
                     order_id=oid,
                     item_id=str(item_raw.get("item_id") or item_raw.get("itemId") or ""),
@@ -222,8 +270,8 @@ def upsert_orders(raw_orders: list[dict[str, Any]], session: Session, *, user_id
 
 def get_sync_result(session: Session, *, user_id: int) -> SyncResult:
     """Build a SyncResult snapshot from current DB state for a specific user."""
-    total = _count_orders(session, user_id)
-    first, last = _date_coverage(session, user_id)
+    total = _count_orders(session, user_id=user_id)
+    first, last = _date_coverage(session, user_id=user_id)
     coverage = f"{first} to {last}" if first and last else "No data"
     return SyncResult(new_orders_fetched=0, total_orders_in_db=total, date_coverage=coverage)
 

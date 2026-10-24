@@ -26,10 +26,12 @@ from dotenv import load_dotenv
 from fastapi import FastAPI
 
 from .api import router as api_router
+from .api_web import router as api_web_router
 from .database import create_db_and_tables
 from .error_handlers import register_error_handlers
 from .mcp_server import mcp
 from .telegram_bot import build_telegram_app
+from fastapi.middleware.cors import CORSMiddleware
 
 # ---------------------------------------------------------------------------
 # Load environment variables from .env file (requirement 13.3)
@@ -86,11 +88,24 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+# Add CORS middleware for frontend
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://localhost:5173",  # Vite dev server
+        "http://localhost:3000",  # Alternative frontend port
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 # Register custom error handlers (requirement 8.8, 10.6, 12.4, 12.6)
 register_error_handlers(app)
 
-# Mount the REST API router
+# Mount the REST API routers
 app.include_router(api_router)
+app.include_router(api_web_router)
 
 # Mount FastMCP as a sub-application (serves MCP over SSE at /mcp)
 app.mount("/mcp", mcp.http_app())

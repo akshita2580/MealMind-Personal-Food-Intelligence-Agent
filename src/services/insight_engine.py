@@ -1321,5 +1321,5 @@ def build_food_insights_response(
             )
             for insight in insights
         ],
-        generated_at=datetime.now(timezone.utc).isoformat() + "Z",
+        generated_at=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
     )

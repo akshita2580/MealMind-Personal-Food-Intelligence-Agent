@@ -6,7 +6,7 @@ via the MCP JSON-RPC protocol on https://mcp.swiggy.com/food.
 """
 import logging
 from typing import Any
-from src.mcp_transport import mcp_call, extract_mcp_result
+from .mcp_transport import mcp_call, extract_mcp_result
 
 logger = logging.getLogger(__name__)
 
@@ -66,15 +66,33 @@ async def get_food_orders(access_token: str, address_id: str) -> list[dict]:
     else:
         logger.info("get_food_orders diagnostic: response is type %s", type(data))
 
-    orders = []
-    if isinstance(data, list):
-        orders = data
-    elif isinstance(data, dict) and "orders" in data:
-        orders = data["orders"]
-    elif isinstance(data, dict) and "statusCode" in data:
-        orders = data.get("orders", [])
-        if not isinstance(orders, list):
-            orders = []
+    # MCP servers may wrap the order list in different envelopes. Walk the
+    # known wrappers rather than treating a successful but nested response as
+    # an empty history.
+    orders = data if isinstance(data, list) else []
+    candidate = data
+    for _ in range(4):
+        if orders:
+            break
+        if not isinstance(candidate, dict):
+            break
+        found = False
+        for key in ("orders", "data", "result", "orderHistory", "history"):
+            nested = candidate.get(key)
+            if isinstance(nested, list):
+                orders = nested
+                found = True
+                break
+            if isinstance(nested, dict):
+                candidate = nested
+                found = True
+                break
+        if not found:
+            break
+
+    if not isinstance(orders, list):
+        orders = []
+    orders = [order for order in orders if isinstance(order, dict)]
             
     logger.info("get_food_orders diagnostic: order_count=%d", len(orders))
     return orders

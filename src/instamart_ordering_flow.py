@@ -2,16 +2,14 @@ import logging
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes, ConversationHandler, CallbackQueryHandler, MessageHandler, filters, CommandHandler
 
-from src.security import decrypt_token
-from src.database import get_session
-from src.models import SwiggyConnection
-from sqlmodel import select
 from src import swiggy_mcp_client
 from src import swiggy_instamart_mcp
 
-from src.telegram_bot import get_user_access_token
+from src.telegram_bot import get_user_access_token, escape_md
 
 logger = logging.getLogger(__name__)
+
+SESSION_EXPIRED_MSG = "⚠️ Session expired. Please start a new order with /instamart"
 
 (
     SELECT_IM_ADDRESS,
@@ -43,6 +41,9 @@ async def start_instamart_flow(update: Update, context: ContextTypes.DEFAULT_TYP
     await query.answer()
     telegram_id = str(update.effective_user.id)
     token = get_user_access_token(telegram_id)
+    if not token:
+        await query.edit_message_text("Please connect Swiggy first using /start")
+        return ConversationHandler.END
     
     try:
         addresses = await swiggy_mcp_client.get_addresses(token)
@@ -77,6 +78,10 @@ async def start_instamart_flow(update: Update, context: ContextTypes.DEFAULT_TYP
 async def handle_im_address_selection(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query
     await query.answer()
+    if "im_order_flow" not in context.user_data:
+        await query.edit_message_text(SESSION_EXPIRED_MSG)
+        return ConversationHandler.END
+
     addr_id = query.data.replace("imaddr_", "")
     context.user_data["im_order_flow"]["address_id"] = addr_id
     
@@ -86,6 +91,11 @@ async def handle_im_address_selection(update: Update, context: ContextTypes.DEFA
     return SEARCH_GROCERY
 
 async def handle_grocery_search(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    if "im_order_flow" not in context.user_data:
+        if update.message:
+            await update.message.reply_text(SESSION_EXPIRED_MSG)
+        return ConversationHandler.END
+
     search_query = update.message.text
     token = context.user_data["im_order_flow"]["token"]
     addr_id = context.user_data["im_order_flow"]["address_id"]
@@ -139,6 +149,9 @@ async def handle_grocery_search(update: Update, context: ContextTypes.DEFAULT_TY
 async def handle_im_item_selection(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query
     await query.answer()
+    if "im_order_flow" not in context.user_data:
+        await query.edit_message_text(SESSION_EXPIRED_MSG)
+        return ConversationHandler.END
     
     if query.data == "view_im_cart":
         return await show_im_cart(update, context)
@@ -169,6 +182,13 @@ async def handle_im_item_selection(update: Update, context: ContextTypes.DEFAULT
 
 async def show_im_cart(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query
+    if "im_order_flow" not in context.user_data:
+        if query:
+            await query.edit_message_text(SESSION_EXPIRED_MSG)
+        elif update.message:
+            await update.message.reply_text(SESSION_EXPIRED_MSG)
+        return ConversationHandler.END
+
     token = context.user_data["im_order_flow"]["token"]
     addr_id = context.user_data["im_order_flow"]["address_id"]
     
@@ -188,7 +208,10 @@ async def show_im_cart(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
             
         msg = "🛒 *Your Instamart Cart*\n\n"
         for item in items:
-            msg += f"• {item.get('quantity', 1)}x {item.get('itemName', 'Item')} ({item.get('itemVariant', '')}) - ₹{item.get('discountedFinalPrice', 0)}\n"
+            name = escape_md(item.get('itemName', 'Item'))
+            variant = escape_md(item.get('itemVariant', ''))
+            variant_str = f" ({variant})" if variant else ""
+            msg += f"• {item.get('quantity', 1)}x {name}{variant_str} - ₹{item.get('discountedFinalPrice', 0)}\n"
             
         msg += f"\n*Total:* {total}"
         
@@ -211,6 +234,9 @@ async def show_im_cart(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
 async def proceed_to_im_payment(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query
     await query.answer()
+    if "im_order_flow" not in context.user_data:
+        await query.edit_message_text(SESSION_EXPIRED_MSG)
+        return ConversationHandler.END
     
     token = context.user_data["im_order_flow"]["token"]
     addr_id = context.user_data["im_order_flow"]["address_id"]
@@ -249,6 +275,9 @@ async def proceed_to_im_payment(update: Update, context: ContextTypes.DEFAULT_TY
 async def confirm_im_payment_and_place_order(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query
     await query.answer()
+    if "im_order_flow" not in context.user_data:
+        await query.edit_message_text(SESSION_EXPIRED_MSG)
+        return ConversationHandler.END
     
     token = context.user_data["im_order_flow"]["token"]
     addr_id = context.user_data["im_order_flow"]["address_id"]
@@ -276,7 +305,7 @@ async def confirm_im_payment_and_place_order(update: Update, context: ContextTyp
             
             keyboard = [[InlineKeyboardButton("Check Payment Status", callback_data="im_check_upi_status")]]
             await query.edit_message_text(
-                f"⏳ *Payment Pending*\n\nPlease complete the payment on your UPI app.\nOrder ID: {order_id}",
+                f"⏳ *Payment Pending*\n\nPlease complete the payment on your UPI app.\nOrder ID: {escape_md(order_id)}",
                 reply_markup=InlineKeyboardMarkup(keyboard),
                 parse_mode="Markdown"
             )
@@ -298,6 +327,9 @@ async def confirm_im_payment_and_place_order(update: Update, context: ContextTyp
 async def check_im_upi_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query
     await query.answer()
+    if "im_order_flow" not in context.user_data:
+        await query.edit_message_text(SESSION_EXPIRED_MSG)
+        return ConversationHandler.END
     
     token = context.user_data["im_order_flow"]["token"]
     addr_id = context.user_data["im_order_flow"]["address_id"]

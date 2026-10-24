@@ -3,9 +3,11 @@ import json
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes, ConversationHandler, CommandHandler, CallbackQueryHandler, MessageHandler, filters
 from src import swiggy_mcp_client
-from src.telegram_bot import get_user_access_token
+from src.telegram_bot import get_user_access_token, escape_md
 
 logger = logging.getLogger(__name__)
+
+SESSION_EXPIRED_MSG = "⚠️ Session expired. Please start a new order with /order"
 
 (
     SELECT_ADDRESS, SEARCH_RESTAURANT, SELECT_RESTAURANT, SELECT_MENU_ITEM, 
@@ -47,6 +49,8 @@ async def start_order_flow(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             await query.edit_message_text("No addresses found on your Swiggy account.")
             return ConversationHandler.END
             
+        context.user_data["order_flow"]["addresses"] = addresses
+            
         keyboard = []
         for a in addresses:
             aid = str(a.get("id") or a.get("addressId") or a.get("address_id", ""))
@@ -72,8 +76,24 @@ async def start_order_flow(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 async def handle_address_selection(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query
     await query.answer()
+    if "order_flow" not in context.user_data:
+        await query.edit_message_text(SESSION_EXPIRED_MSG)
+        return ConversationHandler.END
+
     addr_id = query.data.replace("addr_", "")
     context.user_data["order_flow"]["address_id"] = addr_id
+    
+    addresses = context.user_data["order_flow"].get("addresses", [])
+    addr = next((a for a in addresses if str(a.get("id") or a.get("addressId") or a.get("address_id", "")) == addr_id), None)
+    if addr:
+        context.user_data["order_flow"]["address"] = addr
+        lat = float(addr.get("latitude") or addr.get("lat") or 0.0)
+        lng = float(addr.get("longitude") or addr.get("lng") or 0.0)
+        context.user_data["order_flow"]["lat"] = lat
+        context.user_data["order_flow"]["lng"] = lng
+    else:
+        context.user_data["order_flow"]["lat"] = 0.0
+        context.user_data["order_flow"]["lng"] = 0.0
     
     await query.edit_message_text(
         "Address selected!\n\n🔍 Please type the name of a restaurant or dish you want to search for:"
@@ -81,6 +101,11 @@ async def handle_address_selection(update: Update, context: ContextTypes.DEFAULT
     return SEARCH_RESTAURANT
 
 async def handle_restaurant_search(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    if "order_flow" not in context.user_data:
+        if update.message:
+            await update.message.reply_text(SESSION_EXPIRED_MSG)
+        return ConversationHandler.END
+
     search_query = update.message.text
     token = context.user_data["order_flow"]["token"]
     addr_id = context.user_data["order_flow"]["address_id"]
@@ -116,6 +141,10 @@ async def handle_restaurant_search(update: Update, context: ContextTypes.DEFAULT
 async def handle_restaurant_selection(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query
     await query.answer()
+    if "order_flow" not in context.user_data:
+        await query.edit_message_text(SESSION_EXPIRED_MSG)
+        return ConversationHandler.END
+
     rest_id = query.data.replace("rest_", "")
     context.user_data["order_flow"]["restaurant_id"] = rest_id
     token = context.user_data["order_flow"]["token"]
@@ -171,6 +200,9 @@ async def handle_restaurant_selection(update: Update, context: ContextTypes.DEFA
 async def handle_menu_item_selection(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query
     await query.answer()
+    if "order_flow" not in context.user_data:
+        await query.edit_message_text(SESSION_EXPIRED_MSG)
+        return ConversationHandler.END
     
     if query.data == "view_cart":
         return await show_cart(update, context)
@@ -205,6 +237,13 @@ async def handle_menu_item_selection(update: Update, context: ContextTypes.DEFAU
 
 async def show_cart(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query
+    if "order_flow" not in context.user_data:
+        if query:
+            await query.edit_message_text(SESSION_EXPIRED_MSG)
+        elif update.message:
+            await update.message.reply_text(SESSION_EXPIRED_MSG)
+        return ConversationHandler.END
+
     token = context.user_data["order_flow"]["token"]
     addr_id = context.user_data["order_flow"]["address_id"]
     
@@ -228,7 +267,8 @@ async def show_cart(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         for item in items:
             raw_p = item.get("final_price") or item.get("subtotal") or item.get("price") or item.get("defaultPrice") or 0
             p = raw_p / 100 if raw_p > 10000 else raw_p
-            msg += f"• {item.get('quantity', 1)}x {item.get('name', 'Item')} - ₹{p}\n"
+            name = escape_md(item.get('name', 'Item'))
+            msg += f"• {item.get('quantity', 1)}x {name} - ₹{p}\n"
             
         msg += f"\n*Total:* ₹{total}"
         
@@ -247,6 +287,9 @@ async def show_cart(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 async def proceed_to_payment(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query
     await query.answer()
+    if "order_flow" not in context.user_data:
+        await query.edit_message_text(SESSION_EXPIRED_MSG)
+        return ConversationHandler.END
     
     token = context.user_data["order_flow"]["token"]
     addr_id = context.user_data["order_flow"]["address_id"]
@@ -286,6 +329,9 @@ async def proceed_to_payment(update: Update, context: ContextTypes.DEFAULT_TYPE)
 async def confirm_payment_and_place_order(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query
     await query.answer()
+    if "order_flow" not in context.user_data:
+        await query.edit_message_text(SESSION_EXPIRED_MSG)
+        return ConversationHandler.END
     
     method = query.data.replace("pay_", "")
     token = context.user_data["order_flow"]["token"]
@@ -322,6 +368,9 @@ async def confirm_payment_and_place_order(update: Update, context: ContextTypes.
 async def check_upi_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query
     await query.answer()
+    if "order_flow" not in context.user_data:
+        await query.edit_message_text(SESSION_EXPIRED_MSG)
+        return ConversationHandler.END
     
     token = context.user_data["order_flow"]["token"]
     addr_id = context.user_data["order_flow"]["address_id"]
@@ -334,8 +383,14 @@ async def check_upi_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         
         if status == "SUCCESS" or status == "PAID":
             await query.edit_message_text("✅ Payment Successful! Confirming order...")
-            # Auto confirm
-            await swiggy_mcp_client.confirm_order(token, order_id, addr_id, 0.0, 0.0) # We might need real lat/lng
+            # Auto confirm using user's selected address lat/lng
+            lat = context.user_data["order_flow"].get("lat", 0.0)
+            lng = context.user_data["order_flow"].get("lng", 0.0)
+            if not lat or not lng:
+                addr = context.user_data["order_flow"].get("address", {})
+                lat = float(addr.get("latitude") or addr.get("lat") or lat or 0.0)
+                lng = float(addr.get("longitude") or addr.get("lng") or lng or 0.0)
+            await swiggy_mcp_client.confirm_order(token, order_id, addr_id, lat, lng)
             await query.edit_message_text(f"🎉 Order {order_id} is PLACED successfully!")
             return ConversationHandler.END
         elif status == "FAILED":
@@ -432,7 +487,8 @@ async def handle_cart_callback(update: Update, context: ContextTypes.DEFAULT_TYP
         for item in items:
             raw_p = item.get("final_price") or item.get("subtotal") or item.get("price") or item.get("defaultPrice") or 0
             p = raw_p / 100 if raw_p > 10000 else raw_p
-            msg += f"• {item.get('quantity', 1)}x {item.get('name', 'Item')} - ₹{p}\n"
+            name = escape_md(item.get('name', 'Item'))
+            msg += f"• {item.get('quantity', 1)}x {name} - ₹{p}\n"
             
         msg += f"\n*Total:* ₹{total}\n\n"
         msg += "_Use '🍴 Order Food' from the main menu to modify your cart._"
@@ -485,11 +541,11 @@ async def handle_active_order_callback(update: Update, context: ContextTypes.DEF
             return
             
         o = active_orders[0]
-        order_id = o.get("orderId", "Unknown")
-        rest_name = o.get("restaurantName", "Restaurant")
-        status = o.get("orderStatus", "PENDING")
+        order_id = escape_md(o.get("orderId", "Unknown"))
+        rest_name = escape_md(o.get("restaurantName", "Restaurant"))
+        status = escape_md(o.get("orderStatus", "PENDING"))
         total = o.get("orderTotal", 0)
-        if isinstance(total, int): total = total / 100
+        total = total / 100 if total > 10000 else total
         
         msg = f"📦 *Active Order: {order_id}*\n\n"
         msg += f"🏪 *{rest_name}*\n"

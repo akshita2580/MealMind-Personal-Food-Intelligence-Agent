@@ -31,7 +31,7 @@ _DATA_DIR = _PROJECT_ROOT / "data"
 @lru_cache(maxsize=1)
 def get_engine() -> Any:
     """
-    Return a cached SQLAlchemy engine pointing at the local SQLite file.
+    Return a cached SQLAlchemy engine pointing at the local database file or URL.
     
     Reads database path from DATABASE_URL environment variable.
     Defaults to 'data/swiggy.db' if not set.
@@ -39,8 +39,11 @@ def get_engine() -> Any:
     # Read from environment variable with default
     db_path = os.environ.get("DATABASE_URL", "data/swiggy.db")
     
-    # If it's a relative path, resolve it relative to project root
-    if not db_path.startswith("sqlite:///"):
+    # If it already looks like a full database URL (contains ://), use it as-is
+    if "://" in db_path:
+        url = db_path
+    else:
+        # If it's a relative path, resolve it relative to project root
         path_obj = Path(db_path)
         if not path_obj.is_absolute():
             path_obj = _PROJECT_ROOT / path_obj
@@ -49,14 +52,12 @@ def get_engine() -> Any:
         path_obj.parent.mkdir(parents=True, exist_ok=True)
         
         url = f"sqlite:///{path_obj}"
-    else:
-        # Already a full SQLite URL
-        url = db_path
     
+    connect_args = {"check_same_thread": False} if url.startswith("sqlite") else {}
     return create_engine(
         url,
         echo=False,
-        connect_args={"check_same_thread": False},
+        connect_args=connect_args,
     )
 
 
@@ -83,5 +84,8 @@ def get_session() -> Generator[Session, None, None]:
     session = Session(get_engine())
     try:
         yield session
+    except Exception:
+        session.rollback()
+        raise
     finally:
         session.close()

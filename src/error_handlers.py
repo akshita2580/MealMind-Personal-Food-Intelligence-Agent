@@ -16,10 +16,9 @@ All error responses:
 from __future__ import annotations
 
 import logging
-import sys
 from typing import Any
 
-from fastapi import Request, status
+from fastapi import HTTPException, Request, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from pydantic import ValidationError
@@ -220,6 +219,27 @@ async def value_error_exception_handler(
     )
 
 
+async def http_exception_handler(
+    request: Request,
+    exc: HTTPException
+) -> JSONResponse:
+    """
+    Handle HTTPException explicitly to preserve status code and detail.
+    """
+    logger.error(
+        "HTTP %d error on %s %s: %s",
+        exc.status_code,
+        request.method,
+        request.url.path,
+        exc.detail,
+    )
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"detail": exc.detail},
+        headers=getattr(exc, "headers", None),
+    )
+
+
 async def generic_exception_handler(
     request: Request,
     exc: Exception
@@ -263,4 +283,5 @@ def register_error_handlers(app: Any) -> None:
     app.add_exception_handler(AuthenticationError, authentication_exception_handler)
     app.add_exception_handler(SwiggyAPIError, swiggy_api_exception_handler)
     app.add_exception_handler(ValueError, value_error_exception_handler)
+    app.add_exception_handler(HTTPException, http_exception_handler)
     app.add_exception_handler(Exception, generic_exception_handler)

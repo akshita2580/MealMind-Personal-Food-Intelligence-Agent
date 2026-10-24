@@ -20,12 +20,11 @@ from sqlmodel import Session, select
 from . import fetcher, repository
 from .database import get_session
 from .models import (
-    AnalyticsResult,
     OrderOut,
     RestaurantStats,
     SyncOrdersRequest,
     SyncResult,
-    InsightsListResponse,
+    User,
 )
 from .security import encrypt_token
 
@@ -77,6 +76,22 @@ def _session() -> Generator[Session, None, None]:
     with get_session() as session:
         yield session
 
+
+def _resolve_user_id(request: Request, session: Session) -> int:
+    """Resolve current user_id from session or default to first user / 1."""
+    try:
+        from .api_web import get_current_user
+        session_id = request.cookies.get("session_id") or request.headers.get("X-Session-ID")
+        user = get_current_user(request, session_id=session_id, db=session)
+        if user and user.id is not None:
+            return user.id
+    except Exception:
+        pass
+    first_user = session.exec(select(User)).first()
+    if first_user and first_user.id is not None:
+        return first_user.id
+    return 1
+
 # ---------------------------------------------------------------------------
 # GET /api/health
 # ---------------------------------------------------------------------------
@@ -90,7 +105,9 @@ def health_check(session: Session = Depends(_session)) -> dict[str, str | dict[s
     - Total orders in database
     - Date coverage (first to last order)
     """
-    sync_result = repository.get_sync_result(session)
+    first_user = session.exec(select(User)).first()
+    user_id = first_user.id if first_user and first_user.id is not None else 1
+    sync_result = repository.get_sync_result(session, user_id=user_id)
     return {
         "status": "ok",
         "service": "swiggy-mcp-server",
@@ -105,7 +122,11 @@ def health_check(session: Session = Depends(_session)) -> dict[str, str | dict[s
 # ---------------------------------------------------------------------------
 
 @router.post("/sync", response_model=SyncResult, summary="Sync orders from Swiggy")
-async def sync_orders(body: SyncOrdersRequest, session: Session = Depends(_session)) -> SyncResult:
+async def sync_orders(
+    body: SyncOrdersRequest,
+    request: Request,
+    session: Session = Depends(_session),
+) -> SyncResult:
     """
     Fetch orders from the Swiggy API using the provided session cookies
     and persist them into the local SQLite database.
@@ -117,36 +138,16 @@ async def sync_orders(body: SyncOrdersRequest, session: Session = Depends(_sessi
     - 422: Request validation failed
     - 502: Failed to fetch from Swiggy API
     """
+    user_id = _resolve_user_id(request, session)
+
     # Fetch orders from Swiggy API (errors propagate to error handlers)
     raw_orders = await fetcher.fetch_all_orders(body.cookies.get_secret_value(), max_pages=body.max_pages)
 
     # Persist to database
-    new_count = repository.upsert_orders(raw_orders, session)
-    result = repository.get_sync_result(session)
+    new_count = repository.upsert_orders(raw_orders, session, user_id=user_id)
+    result = repository.get_sync_result(session, user_id=user_id)
     result.new_orders_fetched = new_count
     return result
-
-# ---------------------------------------------------------------------------
-# GET /api/orders
-# ---------------------------------------------------------------------------
-
-@router.get("/orders", response_model=list[OrderOut], summary="Get orders")
-def get_orders_endpoint(
-    start_date: str | None = Query(default=None, description="YYYY-MM-DD"),
-    end_date: str | None = Query(default=None, description="YYYY-MM-DD"),
-    restaurant_name: str | None = Query(default=None),
-    limit: int = Query(default=50, ge=1, le=500),
-    session: Session = Depends(_session),
-) -> list[OrderOut]:
-    """Retrieve orders with optional date, restaurant, and limit filters."""
-    orders = repository.get_orders(
-        session,
-        start_date=start_date,
-        end_date=end_date,
-        restaurant_name=restaurant_name,
-        limit=limit,
-    )
-    return [repository.to_order_out(o, session) for o in orders]
 
 # ---------------------------------------------------------------------------
 # GET /api/restaurants
@@ -165,87 +166,20 @@ def get_restaurants(
     )
 
 # ---------------------------------------------------------------------------
-# GET /api/analytics
-# ---------------------------------------------------------------------------
-
-@router.get("/analytics", response_model=AnalyticsResult, summary="Get analytics")
-def get_analytics(
-    start_date: str | None = Query(default=None),
-    end_date: str | None = Query(default=None),
-    analysis_type: str = Query(default="summary"),
-    session: Session = Depends(_session),
-) -> AnalyticsResult:
-    """
-    Generate analytics.
-
-    **analysis_type** can be one of:
-    ``summary``, ``spending``, ``timing``, ``restaurants``, ``cuisines``.
-    """
-    return repository.build_analytics(
-        session,
-        start_date=start_date,
-        end_date=end_date,
-        analysis_type=analysis_type,
-    )
-
-# ---------------------------------------------------------------------------
 # GET /api/search
 # ---------------------------------------------------------------------------
 
 @router.get("/search", response_model=list[OrderOut], summary="Search orders")
 def search_orders(
+    request: Request,
     query: str = Query(..., min_length=1, description="Search term"),
     limit: int = Query(default=20, ge=1, le=200),
     session: Session = Depends(_session),
 ) -> list[OrderOut]:
     """Search orders by restaurant name, cuisine, location, or item name."""
-    orders = repository.search_orders(session, query, limit=limit)
+    user_id = _resolve_user_id(request, session)
+    orders = repository.search_orders(session, query, user_id=user_id, limit=limit)
     return [repository.to_order_out(o, session) for o in orders]
-
-# ---------------------------------------------------------------------------
-# GET /api/insights
-# ---------------------------------------------------------------------------
-
-@router.get("/insights", response_model=InsightsListResponse, summary="Get food intelligence insights")
-def get_insights(
-    start_date: str | None = Query(default=None, description="YYYY-MM-DD"),
-    end_date: str | None = Query(default=None, description="YYYY-MM-DD"),
-    period: str | None = Query(
-        default=None,
-        description="Natural period: today, yesterday, this week, last week, this month, last month",
-    ),
-    session: Session = Depends(_session),
-) -> InsightsListResponse:
-    """
-    Generate personalized food intelligence insights.
-    
-    Analyzes your ordering behavior, spending patterns, restaurant loyalty,
-    cuisine preferences, and more to provide actionable insights.
-    
-    **Query Parameters:**
-    - start_date: Filter insights to orders from this date onwards (YYYY-MM-DD)
-    - end_date: Filter insights to orders until this date (YYYY-MM-DD)
-    - period: Natural period such as "this month" or "last week"
-    
-    **Returns:**
-    - InsightsListResponse with period info and list of insights
-    
-    **Insights Include:**
-    - Spending patterns and trends
-    - Ordering behavior (frequency, peak hours, days)
-    - Restaurant loyalty and diversity
-    - Cuisine preferences
-    - Repeat food items
-    - Late-night ordering patterns
-    """
-    from .services.insight_engine import build_food_insights_response
-
-    return build_food_insights_response(
-        session,
-        start_date=start_date,
-        end_date=end_date,
-        period=period,
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -393,20 +327,39 @@ async def swiggy_oauth_callback(
         )
     
         session.commit()
+        
+        # Create web session cookie
+        from .api_web import sessions, generate_session_id
+        
+        session_id = generate_session_id()
+        sessions[session_id] = {"user_id": user.id}
+        logger.info(f"✅ Created session: {session_id} for user_id: {user.id}")
+        logger.info(f"Active sessions after creation: {list(sessions.keys())}")
+        
     finally:
         # 4. Always consume the state
         session.delete(oauth_state)
         session.commit()
 
-    # 4. Show success page
-    html = """
+    # 5. Redirect to React app with session ID in URL (will be stored client-side)
+    callback_url = f"http://localhost:5173/oauth/callback?session_id={session_id}"
+    response = HTMLResponse(f"""
     <html>
-        <head><title>Swiggy Connected</title></head>
+        <head>
+            <title>Swiggy Connected</title>
+            <meta http-equiv="refresh" content="1;url={callback_url}" />
+        </head>
         <body style="font-family: sans-serif; text-align: center; padding: 50px;">
             <h1 style="color: #4CAF50;">✅ Swiggy connected successfully!</h1>
-            <p>Your FoodIQ account is now connected to Swiggy.</p>
-            <p>You can close this window and return to Telegram.</p>
+            <p>Your MealMind account is now connected to Swiggy.</p>
+            <p>Redirecting to dashboard...</p>
+            <script>
+                setTimeout(function() {{
+                    window.location.href = '{callback_url}';
+                }}, 1000);
+            </script>
         </body>
     </html>
-    """
-    return HTMLResponse(html)
+    """)
+    logger.info(f"✅ Session created: {session_id[:16]}... - redirecting with session ID in URL")
+    return response

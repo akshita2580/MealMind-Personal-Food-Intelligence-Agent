@@ -6,6 +6,7 @@ import base64
 import hashlib
 import secrets
 import logging
+from pathlib import Path
 from cryptography.fernet import Fernet
 
 logger = logging.getLogger(__name__)
@@ -26,7 +27,7 @@ def get_encryption_key() -> bytes:
         raise RuntimeError("FATAL: ENCRYPTION_KEY must be set in production environment")
         
     # Development fallback
-    dev_key_path = ".dev_encryption_key"
+    dev_key_path = Path(__file__).resolve().parent.parent / ".dev_encryption_key"
     if os.path.exists(dev_key_path):
         with open(dev_key_path, "rb") as f:
             dev_key = f.read().strip()

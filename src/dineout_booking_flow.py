@@ -3,25 +3,24 @@ import datetime
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes, ConversationHandler, CallbackQueryHandler, MessageHandler, filters, CommandHandler
 
-from src.security import decrypt_token
-from src.database import get_session
-from src.models import SwiggyConnection
-from sqlmodel import select
 from src import swiggy_mcp_client
 from src import swiggy_dineout_mcp
 
-from src.telegram_bot import get_user_access_token
+from src.telegram_bot import get_user_access_token, escape_md
 
 logger = logging.getLogger(__name__)
+
+SESSION_EXPIRED_MSG = "⚠️ Session expired. Please start a new booking with /dineout"
 
 (
     SELECT_DO_ADDRESS,
     SEARCH_DINING,
     SELECT_DINING_VENUE,
+    SELECT_DO_DATE,
     SELECT_DATE_TIME,
     SELECT_GUEST_COUNT,
     CONFIRM_BOOKING
-) = range(20, 26)
+) = range(20, 27)
 
 async def cancel_do_flow(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query
@@ -44,6 +43,9 @@ async def start_dineout_flow(update: Update, context: ContextTypes.DEFAULT_TYPE)
     await query.answer()
     telegram_id = str(update.effective_user.id)
     token = get_user_access_token(telegram_id)
+    if not token:
+        await query.edit_message_text("Please connect Swiggy first using /start")
+        return ConversationHandler.END
     
     try:
         addresses = await swiggy_mcp_client.get_addresses(token)
@@ -78,14 +80,18 @@ async def start_dineout_flow(update: Update, context: ContextTypes.DEFAULT_TYPE)
 async def handle_do_address_selection(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query
     await query.answer()
+    if "do_flow" not in context.user_data:
+        await query.edit_message_text(SESSION_EXPIRED_MSG)
+        return ConversationHandler.END
+
     addr_id = query.data.replace("doaddr_", "")
     
     # Store lat/lng for slots API
     addresses = context.user_data["do_flow"].get("addresses", [])
-    addr = next((a for a in addresses if str(a.get("id", "")) == addr_id), None)
+    addr = next((a for a in addresses if str(a.get("id") or a.get("addressId") or a.get("address_id", "")) == addr_id), None)
     
-    lat = addr.get("latitude") or 0.0 if addr else 0.0
-    lng = addr.get("longitude") or 0.0 if addr else 0.0
+    lat = float(addr.get("latitude") or addr.get("lat") or 0.0) if addr else 0.0
+    lng = float(addr.get("longitude") or addr.get("lng") or 0.0) if addr else 0.0
     
     context.user_data["do_flow"]["address_id"] = addr_id
     context.user_data["do_flow"]["lat"] = lat
@@ -97,6 +103,11 @@ async def handle_do_address_selection(update: Update, context: ContextTypes.DEFA
     return SEARCH_DINING
 
 async def handle_dining_search(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    if "do_flow" not in context.user_data:
+        if update.message:
+            await update.message.reply_text(SESSION_EXPIRED_MSG)
+        return ConversationHandler.END
+
     search_query = update.message.text
     token = context.user_data["do_flow"]["token"]
     addr_id = context.user_data["do_flow"]["address_id"]
@@ -134,29 +145,61 @@ async def handle_dining_search(update: Update, context: ContextTypes.DEFAULT_TYP
 async def handle_do_venue_selection(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query
     await query.answer()
+    if "do_flow" not in context.user_data:
+        await query.edit_message_text(SESSION_EXPIRED_MSG)
+        return ConversationHandler.END
     
     rest_id = query.data.replace("dorest_", "")
     context.user_data["do_flow"]["restaurant_id"] = rest_id
     
+    today = datetime.date.today()
+    keyboard = []
+    for i in range(7):
+        target_date = today + datetime.timedelta(days=i)
+        date_str = target_date.strftime("%Y-%m-%d")
+        if i == 0:
+            label = f"Today ({target_date.strftime('%b %d')})"
+        elif i == 1:
+            label = f"Tomorrow ({target_date.strftime('%b %d')})"
+        else:
+            label = target_date.strftime("%a, %b %d")
+        keyboard.append([InlineKeyboardButton(label, callback_data=f"dodate_{date_str}")])
+        
+    keyboard.append([InlineKeyboardButton("❌ Cancel", callback_data="cancel_do")])
+    
+    await query.edit_message_text(
+        "📅 *Select a Date for Dining:*",
+        reply_markup=InlineKeyboardMarkup(keyboard),
+        parse_mode="Markdown"
+    )
+    return SELECT_DO_DATE
+
+async def handle_do_date_selection(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    query = update.callback_query
+    await query.answer()
+    if "do_flow" not in context.user_data:
+        await query.edit_message_text(SESSION_EXPIRED_MSG)
+        return ConversationHandler.END
+
+    date_str = query.data.replace("dodate_", "")
+    context.user_data["do_flow"]["selected_date"] = date_str
+    
     token = context.user_data["do_flow"]["token"]
-    lat = context.user_data["do_flow"]["lat"]
-    lng = context.user_data["do_flow"]["lng"]
+    rest_id = context.user_data["do_flow"]["restaurant_id"]
+    lat = context.user_data["do_flow"].get("lat", 0.0)
+    lng = context.user_data["do_flow"].get("lng", 0.0)
     
-    # Query today
-    today = datetime.datetime.now().strftime("%Y-%m-%d")
-    
-    await query.edit_message_text("⏳ Fetching available slots...")
+    await query.edit_message_text(f"⏳ Fetching available slots for {date_str}...")
     
     try:
-        slots_resp = await swiggy_dineout_mcp.get_available_slots(token, rest_id, today, lat, lng)
+        slots_resp = await swiggy_dineout_mcp.get_available_slots(token, rest_id, date_str, lat, lng)
         slots = slots_resp.get("slots", []) if isinstance(slots_resp, dict) else []
         
         if not slots:
-            await query.edit_message_text("❌ No available slots found for this restaurant today.")
+            await query.edit_message_text(f"❌ No available slots found for this restaurant on {date_str}.")
             return ConversationHandler.END
             
         keyboard = []
-        # Group by day / just show the next 10 slots
         count = 0
         for slot in slots:
             if count >= 20: break
@@ -178,7 +221,7 @@ async def handle_do_venue_selection(update: Update, context: ContextTypes.DEFAUL
         keyboard.append([InlineKeyboardButton("❌ Cancel", callback_data="cancel_do")])
         
         await query.edit_message_text(
-            "📅 *Select a Time Slot:*\n\n(Showing available slots for upcoming days)",
+            f"📅 *Select a Time Slot for {date_str}:*\n\n(Showing available slots)",
             reply_markup=InlineKeyboardMarkup(keyboard),
             parse_mode="Markdown"
         )
@@ -191,6 +234,9 @@ async def handle_do_venue_selection(update: Update, context: ContextTypes.DEFAUL
 async def handle_do_slot_selection(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query
     await query.answer()
+    if "do_flow" not in context.user_data:
+        await query.edit_message_text(SESSION_EXPIRED_MSG)
+        return ConversationHandler.END
     
     data = query.data.replace("doslt_", "")
     parts = data.split("_")
@@ -217,6 +263,9 @@ async def handle_do_slot_selection(update: Update, context: ContextTypes.DEFAULT
 async def handle_do_guest_selection(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query
     await query.answer()
+    if "do_flow" not in context.user_data:
+        await query.edit_message_text(SESSION_EXPIRED_MSG)
+        return ConversationHandler.END
     
     guests = int(query.data.replace("doguest_", ""))
     context.user_data["do_flow"]["guests"] = guests
@@ -239,6 +288,9 @@ async def handle_do_guest_selection(update: Update, context: ContextTypes.DEFAUL
 async def confirm_do_booking(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query
     await query.answer()
+    if "do_flow" not in context.user_data:
+        await query.edit_message_text(SESSION_EXPIRED_MSG)
+        return ConversationHandler.END
     
     await query.edit_message_text("⏳ Booking table...")
     
@@ -279,6 +331,10 @@ def get_dineout_flow_handler() -> ConversationHandler:
             SELECT_DINING_VENUE: [
                 CallbackQueryHandler(cancel_do_flow, pattern="^cancel_do$"),
                 CallbackQueryHandler(handle_do_venue_selection, pattern="^dorest_")
+            ],
+            SELECT_DO_DATE: [
+                CallbackQueryHandler(cancel_do_flow, pattern="^cancel_do$"),
+                CallbackQueryHandler(handle_do_date_selection, pattern="^dodate_")
             ],
             SELECT_DATE_TIME: [
                 CallbackQueryHandler(cancel_do_flow, pattern="^cancel_do$"),

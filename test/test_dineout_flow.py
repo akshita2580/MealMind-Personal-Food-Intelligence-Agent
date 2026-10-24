@@ -4,10 +4,10 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
 from src.dineout_booking_flow import (
     start_dineout_flow, handle_do_address_selection, handle_dining_search,
-    handle_do_venue_selection, handle_do_slot_selection, handle_do_guest_selection,
-    confirm_do_booking, cancel_do_flow,
-    SELECT_DO_ADDRESS, SEARCH_DINING, SELECT_DINING_VENUE, SELECT_DATE_TIME,
-    SELECT_GUEST_COUNT, CONFIRM_BOOKING
+    handle_do_venue_selection, handle_do_date_selection, handle_do_slot_selection,
+    handle_do_guest_selection, confirm_do_booking, cancel_do_flow,
+    SELECT_DO_ADDRESS, SEARCH_DINING, SELECT_DINING_VENUE, SELECT_DO_DATE,
+    SELECT_DATE_TIME, SELECT_GUEST_COUNT, CONFIRM_BOOKING
 )
 from telegram.ext import ConversationHandler
 
@@ -68,10 +68,21 @@ async def test_handle_dining_search(mock_search, mock_update, mock_context):
     mock_update.message.reply_text.assert_called_with("🔍 Searching Dineout for 'pizza'...")
 
 @pytest.mark.asyncio
-@patch("src.swiggy_dineout_mcp.get_available_slots", new_callable=AsyncMock)
-async def test_handle_do_venue_selection(mock_slots, mock_update, mock_context):
+async def test_handle_do_venue_selection(mock_update, mock_context):
     mock_context.user_data["do_flow"] = {"token": "token123", "lat": 19.0, "lng": 72.0}
     mock_update.callback_query.data = "dorest_rest1"
+    
+    state = await handle_do_venue_selection(mock_update, mock_context)
+    
+    assert state == SELECT_DO_DATE
+    assert mock_context.user_data["do_flow"]["restaurant_id"] == "rest1"
+    mock_update.callback_query.edit_message_text.assert_called()
+
+@pytest.mark.asyncio
+@patch("src.swiggy_dineout_mcp.get_available_slots", new_callable=AsyncMock)
+async def test_handle_do_date_selection(mock_slots, mock_update, mock_context):
+    mock_context.user_data["do_flow"] = {"token": "token123", "restaurant_id": "rest1", "lat": 19.0, "lng": 72.0}
+    mock_update.callback_query.data = "dodate_2026-10-15"
     
     mock_slots.return_value = {
         "slots": [
@@ -83,10 +94,11 @@ async def test_handle_do_venue_selection(mock_slots, mock_update, mock_context):
         ]
     }
     
-    state = await handle_do_venue_selection(mock_update, mock_context)
+    state = await handle_do_date_selection(mock_update, mock_context)
     
     assert state == SELECT_DATE_TIME
-    assert mock_context.user_data["do_flow"]["restaurant_id"] == "rest1"
+    assert mock_context.user_data["do_flow"]["selected_date"] == "2026-10-15"
+    mock_slots.assert_called_with("token123", "rest1", "2026-10-15", 19.0, 72.0)
 
 @pytest.mark.asyncio
 async def test_handle_do_slot_selection(mock_update, mock_context):

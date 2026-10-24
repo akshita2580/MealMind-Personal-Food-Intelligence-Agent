@@ -53,7 +53,8 @@ tmp/
 *~
 .kiro/
 .cursor/
-
+*.md
+*test/
 # OS generated files
 .DS_Store
 .DS_Store?

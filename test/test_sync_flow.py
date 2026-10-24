@@ -221,7 +221,7 @@ async def test_do_sync_more_than_5_orders():
 
     # Verify get_orders displays them
     from src.mcp_server import get_orders
-    result = get_orders(limit=50, user_id=user_id)
+    result = await get_orders(limit=50, user_id=user_id)
     assert "Mock Restaurant 17" in result
     assert "17." in result
 

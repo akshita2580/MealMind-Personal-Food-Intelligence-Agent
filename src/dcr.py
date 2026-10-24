@@ -5,11 +5,12 @@ import os
 import json
 import logging
 from datetime import datetime, timezone
+from pathlib import Path
 import httpx
 
 logger = logging.getLogger(__name__)
 
-CLIENT_FILE = ".swiggy_oauth_client.json"
+CLIENT_FILE = Path(__file__).resolve().parent.parent / ".swiggy_oauth_client.json"
 
 async def get_or_register_client() -> str:
     """

@@ -1,6 +1,6 @@
 import logging
 from typing import Any
-from src.mcp_transport import mcp_call, extract_mcp_result
+from .mcp_transport import mcp_call, extract_mcp_result
 import re
 
 logger = logging.getLogger(__name__)
@@ -76,7 +76,7 @@ async def get_available_slots(access_token: str, rest_id: str, date: str, lat: f
         
     # Parse text to build JSON slots!
     # Look for booking params for the requested date
-    param_match = re.search(rf"{date} \[FREE\]: slotId=(\d+), itemId=\"([^\"]+)\"", text)
+    param_match = re.search(rf"{date} \[(?:FREE|PAID)\]: slotId=(\d+), itemId=\"([^\"]+)\"", text)
     if not param_match:
         return {"slots": []}
         
@@ -94,7 +94,7 @@ async def get_available_slots(access_token: str, rest_id: str, date: str, lat: f
     
     # Times look like: "12:00 PM???1787380200" (unicode dash may vary, so we use regex \D+ or similar)
     # Actually just match time string and digits
-    time_matches = re.findall(r"(\d{2}:\d{2}\s+[AMPM]{2})\D+(\d{10,})", date_section)
+    time_matches = re.findall(r"(\d{2}:\d{2}\s+(?:AM|PM))\D+(\d{10,})", date_section)
     
     for time_str, res_time in time_matches:
         slots.append({

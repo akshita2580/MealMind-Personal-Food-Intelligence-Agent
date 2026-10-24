@@ -43,7 +43,7 @@ mcp = FastMCP(
 # -----------------------------------------------------------------------
 
 @mcp.tool()
-def sync_orders(*, user_id: int) -> str:
+async def sync_orders(*, user_id: int) -> str:
     """
     Fetch orders from the Swiggy API and store them in the local database.
 
@@ -67,7 +67,7 @@ def sync_orders(*, user_id: int) -> str:
             access_token = decrypt_token(conn.access_token)
             
         # Get addresses
-        addresses = _run_async(swiggy_mcp_client.get_addresses, access_token)
+        addresses = await swiggy_mcp_client.get_addresses(access_token)
         if not addresses:
             return _format_error("Sync Failed", "No supported Swiggy data is currently available (no addresses found).")
             
@@ -82,7 +82,7 @@ def sync_orders(*, user_id: int) -> str:
             return _format_error("Sync Failed", "No supported Swiggy data is currently available (no address ID).")
             
         # Get orders
-        raw_orders = _run_async(swiggy_mcp_client.get_food_orders, access_token, str(address_id))
+        raw_orders = await swiggy_mcp_client.get_food_orders(access_token, str(address_id))
         if not raw_orders:
             return _format_error("Sync Failed", "No supported Swiggy data is currently available (no orders found).")
 
@@ -111,7 +111,7 @@ def sync_orders(*, user_id: int) -> str:
 # -----------------------------------------------------------------------
 
 @mcp.tool()
-def get_orders(
+async def get_orders(
     start_date: str | None = None,
     end_date: str | None = None,
     restaurant_name: str | None = None,
@@ -166,7 +166,7 @@ def get_orders(
 # -----------------------------------------------------------------------
 
 @mcp.tool()
-def get_restaurants(
+async def get_restaurants(
     start_date: str | None = None,
     end_date: str | None = None,
     min_orders: int = 1,
@@ -222,7 +222,7 @@ def get_restaurants(
 # -----------------------------------------------------------------------
 
 @mcp.tool()
-def get_analytics(
+async def get_analytics(
     start_date: str | None = None,
     end_date: str | None = None,
     analysis_type: str = "summary",
@@ -307,7 +307,7 @@ def get_analytics(
 # -----------------------------------------------------------------------
 
 @mcp.tool()
-def search_orders(
+async def search_orders(
     query: str,
     limit: int = 20,
     *,
@@ -345,7 +345,7 @@ def search_orders(
 # -----------------------------------------------------------------------
 
 @mcp.tool()
-def get_food_insights(
+async def get_food_insights(
     period: str | None = None,
     start_date: str | None = None,
     end_date: str | None = None,
@@ -490,16 +490,6 @@ def _session_scope() -> Generator[Any, None, None]:
             next(session_factory_result)
         except StopIteration:
             pass
-
-
-def _run_async(async_func: Any, *args: Any, **kwargs: Any) -> Any:
-    """Run an async fetcher call from a synchronous MCP tool."""
-    try:
-        asyncio.get_running_loop()
-    except RuntimeError:
-        return asyncio.run(async_func(*args, **kwargs))
-
-    raise RuntimeError("sync_orders cannot be called synchronously inside a running event loop")
 
 
 def _format_error(title: str, message: str) -> str:
