@@ -90,7 +90,7 @@ def _parse_order_time(order_time_str: str) -> datetime | None:
 
 def upsert_orders(raw_orders: list[dict[str, Any]], session: Session, *, user_id: int) -> int:
     """
-    Persist a batch of raw Swiggy API order dicts into SQLite.
+    Persist a batch of raw Swiggy API order dicts into the configured database.
     
     Uses UPSERT semantics (ON CONFLICT DO UPDATE) to handle duplicates.
     Parses and stores cuisines in the normalized order_cuisines table.

@@ -117,6 +117,10 @@ async def handle_dining_search(update: Update, context: ContextTypes.DEFAULT_TYP
     try:
         results = await swiggy_dineout_mcp.search_restaurants_dineout(token, search_query, address_id=addr_id)
         restaurants = results.get("restaurants", []) if isinstance(results, dict) else []
+        location = results.get("_searchLocation", {}) if isinstance(results, dict) else {}
+        if location.get("latitude") is not None and location.get("longitude") is not None:
+            context.user_data["do_flow"]["lat"] = float(location["latitude"])
+            context.user_data["do_flow"]["lng"] = float(location["longitude"])
         
         if not restaurants:
             await msg.edit_text("No restaurants found. Please type another search term:")
@@ -188,6 +192,15 @@ async def handle_do_date_selection(update: Update, context: ContextTypes.DEFAULT
     rest_id = context.user_data["do_flow"]["restaurant_id"]
     lat = context.user_data["do_flow"].get("lat", 0.0)
     lng = context.user_data["do_flow"].get("lng", 0.0)
+
+    # Food address responses intentionally omit coordinates. Dineout slot and
+    # booking calls require real coordinates, so never send a silent (0, 0).
+    if not lat or not lng:
+        await query.edit_message_text(
+            "❌ Swiggy did not return coordinates for this saved location, so I can't check or book slots safely. "
+            "Please try again with a location that returns coordinates."
+        )
+        return ConversationHandler.END
     
     await query.edit_message_text(f"⏳ Fetching available slots for {date_str}...")
     

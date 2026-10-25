@@ -5,12 +5,13 @@ Uses the stored OAuth access token to call get_addresses and get_food_orders
 via the MCP JSON-RPC protocol on https://mcp.swiggy.com/food.
 """
 import logging
+import os
 from typing import Any
 from .mcp_transport import mcp_call, extract_mcp_result
 
 logger = logging.getLogger(__name__)
 
-SWIGGY_FOOD_MCP_URL = "https://mcp.swiggy.com/food"
+SWIGGY_FOOD_MCP_URL = os.getenv("SWIGGY_FOOD_MCP_URL", "https://mcp.swiggy.com/food")
 
 
 async def _mcp_call(access_token: str, tool_name: str, arguments: dict[str, Any]) -> dict:
@@ -101,23 +102,122 @@ async def search_restaurants(access_token: str, address_id: str, query: str) -> 
     resp = await _mcp_call(access_token, "search_restaurants", {"addressId": address_id, "query": query})
     return _extract_result(resp, "search_restaurants")
 
-async def search_menu(access_token: str, address_id: str, query: str, restaurant_id: str = "") -> dict:
+async def search_menu(
+    access_token: str,
+    address_id: str,
+    query: str,
+    restaurant_id: str = "",
+    offset: int = 0,
+) -> dict:
     payload = {"addressId": address_id, "query": query}
     if restaurant_id:
         payload["restaurantIdOfAddedItem"] = restaurant_id
+    if offset > 0:
+        payload["offset"] = offset
     resp = await _mcp_call(access_token, "search_menu", payload)
     return _extract_result(resp, "search_menu")
 
-async def get_restaurant_menu(access_token: str, address_id: str, restaurant_id: str) -> dict:
-    resp = await _mcp_call(access_token, "get_restaurant_menu", {"addressId": address_id, "restaurantId": restaurant_id})
+async def get_restaurant_menu(
+    access_token: str,
+    address_id: str,
+    restaurant_id: str,
+    page: int = 1,
+    page_size: int = 5,
+) -> dict:
+    """Get one page of a restaurant menu using Swiggy's pagination schema."""
+    if not address_id or not restaurant_id:
+        raise ValueError("address_id and restaurant_id are required to fetch a menu")
+    if page < 1 or page_size < 1 or page_size > 8:
+        raise ValueError("page must be positive and page_size must be between 1 and 8")
+
+    arguments = {"addressId": str(address_id), "restaurantId": str(restaurant_id)}
+    if page != 1 or page_size != 5:
+        arguments.update({"page": page, "pageSize": page_size})
+    resp = await _mcp_call(access_token, "get_restaurant_menu", arguments)
     return _extract_result(resp, "get_restaurant_menu")
 
+def _clean_cart_item(item: dict, id_as_int: bool = False, include_aliases: bool = False) -> dict:
+    item_id = (
+        item.get("menu_item_id")
+        or item.get("menuItemId")
+        or item.get("id")
+        or item.get("itemId")
+        or item.get("item_id")
+        or item.get("restaurantMenuItemId")
+    )
+    if not item_id:
+        return {}
+
+    qty = int(item.get("quantity", 1))
+    formatted_id = int(item_id) if (id_as_int and str(item_id).isdigit()) else str(item_id)
+
+    cleaned = {
+        "menu_item_id": formatted_id,
+        "quantity": qty,
+    }
+
+    if include_aliases:
+        cleaned["itemId"] = str(item_id)
+        cleaned["item_id"] = str(item_id)
+        cleaned["id"] = str(item_id)
+
+    # Customizations conforming to Swiggy MCP schema
+    if item.get("variants") and isinstance(item["variants"], list):
+        cleaned["variants"] = item["variants"]
+    elif item.get("variantsV2") and isinstance(item["variantsV2"], list):
+        cleaned["variantsV2"] = item["variantsV2"]
+    if item.get("addons") and isinstance(item["addons"], list):
+        cleaned["addons"] = item["addons"]
+
+    return cleaned
+
+
 async def update_food_cart(access_token: str, restaurant_id: str, cart_items: list, address_id: str) -> dict:
+    """
+    Standard official schema for Swiggy Food MCP update_food_cart.
+    Requires menu_item_id (string) and quantity (number).
+    """
+    cleaned = [_clean_cart_item(i) for i in cart_items if isinstance(i, dict)]
+    cleaned = [i for i in cleaned if i]
+    # #region agent log
+    try:
+        import json, time
+        with open(r"c:\Users\Akshita\Desktop\MealMind-Personal-Food-Intelligence-Agent\debug-dad6f0.log", "a", encoding="utf-8") as fh:
+            fh.write(json.dumps({"sessionId":"dad6f0","runId":"pre-fix","hypothesisId":"H5","location":"swiggy_mcp_client.py:update_food_cart","message":"cleaned MCP cartItems","data":{"mcp_url":SWIGGY_FOOD_MCP_URL,"restaurant_id":str(restaurant_id),"cleaned":cleaned},"timestamp":int(time.time()*1000)}, default=str)+"\n")
+    except Exception:
+        pass
+    # #endregion
     resp = await _mcp_call(access_token, "update_food_cart", {
-        "restaurantId": restaurant_id,
-        "cartItems": cart_items,
-        "addressId": address_id,
-        "cutleryOptIn": False
+        "restaurantId": str(restaurant_id),
+        "cartItems": cleaned,
+        "addressId": str(address_id),
+        "cutleryOptIn": False,
+    })
+    return _extract_result(resp, "update_food_cart")
+
+
+async def update_food_cart_int_id(access_token: str, restaurant_id: str, cart_items: list, address_id: str) -> dict:
+    """Fallback schema with integer menu_item_id if ID is all digits."""
+    cleaned = [_clean_cart_item(i, id_as_int=True) for i in cart_items if isinstance(i, dict)]
+    cleaned = [i for i in cleaned if i]
+    resp = await _mcp_call(access_token, "update_food_cart", {
+        "restaurantId": str(restaurant_id),
+        "cartItems": cleaned,
+        "addressId": str(address_id),
+        "cutleryOptIn": False,
+    })
+    return _extract_result(resp, "update_food_cart")
+
+
+async def update_food_cart_compat(access_token: str, restaurant_id: str, cart_items: list, address_id: str) -> dict:
+    """Compatibility schema with itemId and menu_item_id aliases."""
+    cleaned = [_clean_cart_item(i, include_aliases=True) for i in cart_items if isinstance(i, dict)]
+    cleaned = [i for i in cleaned if i]
+    resp = await _mcp_call(access_token, "update_food_cart", {
+        "restaurantId": str(restaurant_id),
+        "cartItems": cleaned,
+        "addressId": str(address_id),
+        "cutleryOptIn": False,
     })
     return _extract_result(resp, "update_food_cart")
 

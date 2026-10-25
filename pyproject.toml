@@ -1,7 +1,7 @@
 [project]
 name = "swiggy-mcp-server"
 version = "1.0.0"
-description = "Swiggy Orders MCP Server — Python edition (FastMCP + FastAPI + SQLite)"
+description = "Swiggy Orders MCP Server — Python edition (FastMCP + FastAPI + PostgreSQL)"
 authors = [
     {name = "Swiggy MCP Server Team"}
 ]
@@ -16,6 +16,7 @@ dependencies = [
     "python-dotenv>=1.0.0",
     "python-telegram-bot>=21.0",
     "cryptography>=42.0.0",
+    "psycopg[binary]>=3.2.0",
 ]
 
 [project.scripts]

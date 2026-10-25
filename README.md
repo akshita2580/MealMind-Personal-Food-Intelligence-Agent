@@ -68,7 +68,7 @@ graph TD
 3. **Data, Analytics & Security**
    - **Dynamic Client Registration (`dcr.py`)**: Automatically negotiates and registers the OAuth client with Swiggy on startup.
    - **Token Encryption (`security.py`)**: OAuth tokens (`SwiggyConnection`) are encrypted at rest using `cryptography.fernet`.
-   - **`insight_engine.py`**: Aggregates SQLite historical data to rank top dishes, analyze peak hours, and generate LLM-friendly insight reports.
+   - **`insight_engine.py`**: Aggregates historical order data to rank top dishes, analyze peak hours, and generate LLM-friendly insight reports.
 
 ---
 
@@ -97,6 +97,8 @@ SWIGGY_REDIRECT_URI=https://your-ngrok-url.app/api/auth/swiggy/callback
 # (Required in Production) Base64 URL-safe string for encrypting DB tokens
 # ENCRYPTION_KEY=... 
 ```
+
+Set `DATABASE_URL` to your PostgreSQL connection URL. For an existing SQLite database, install the requirements and run `python scripts/migrate_sqlite_to_postgres.py` after configuring that URL. The migration copies `data/swiggy.db` into empty PostgreSQL tables and leaves the SQLite file untouched.
 
 ### 3. Installation & Boot
 ```bash

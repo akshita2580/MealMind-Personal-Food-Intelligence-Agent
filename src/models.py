@@ -2,7 +2,7 @@
 Pydantic & SQLModel schemas for the Swiggy MCP server.
 
 Three layers live here:
-  1. **Database tables** – SQLModel classes persisted in SQLite.
+  1. **Database tables** – SQLModel classes persisted in SQLite or PostgreSQL.
   2. **API response schemas** – plain Pydantic models returned by FastAPI.
   3. **Shared input schemas** – used by *both* MCP tools and REST endpoints.
 
@@ -108,7 +108,7 @@ class SwiggyConnection(SQLModel, table=True):
 class OAuthState(SQLModel, table=True):
     """Temporary state for securing the OAuth flow against CSRF and tracking PKCE.
     
-    IMPORTANT: All datetime fields are stored as naive UTC datetimes in SQLite.
+    IMPORTANT: All datetime fields are stored as naive UTC datetimes.
     When creating: use datetime.now(timezone.utc).replace(tzinfo=None)
     When reading: treat as UTC and add timezone if needed.
     """

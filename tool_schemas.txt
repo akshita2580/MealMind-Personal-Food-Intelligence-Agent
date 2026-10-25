@@ -1,0 +1,296 @@
+=== TOOL: search_menu ===
+Search for dishes and menu items to order for food delivery. PRIMARY FOOD DELIVERY SERVICE - Use this when user wants to find specific dishes, browse menu items, see what a restaurant offers, or order food. Swiggy Food delivery. Returns items with their customizations. The text response includes variant/addon IDs that you need for update_food_cart calls. IMPORTANT: Each item has EITHER "variations" (legacy format) OR "variantsV2" (new format), never both - check which field exists and use the corresponding field when adding to cart. The addons shown are ALL possible addons for the item, but some addons are only valid for specific variant selections. When adding items to cart with customizations: (1) Add item with variants first using the SAME format (variations or variantsV2) as returned, (2) Check cart response for valid_addons to see which addons are actually available for your variant selection, (3) Then add addons from valid_addons list. Optionally scope with restaurantIdOfAddedItem. NOT for groceries or restaurant reservations.
+
+⚠️ REQUIRED WORKFLOW: You MUST call get_addresses first to obtain a valid addressId, then pass that addressId to this tool. NEVER guess, invent, or use placeholder values. The addressId must come from get_addresses response.
+
+CROSS-RESTAURANT SEARCH: When user asks for a dish, first search within the current restaurant (using restaurantIdOfAddedItem if items are in cart). If no results or poor matches, search again WITHOUT restaurantIdOfAddedItem to find the dish at other restaurants. Inform the user: "I couldn't find that at [restaurant]. Here are options from other restaurants."
+
+DRILL INTO A DISH: A search WITHOUT restaurantIdOfAddedItem returns dishes across many restaurants (each line shows its "restaurantId: <id>"). When the user picks/opens a specific dish from those results, call search_menu again with restaurantIdOfAddedItem set to THAT dish's restaurantId — this returns the dish scoped to its restaurant with full variant/add-on details so it can be added to the cart.
+
+ADDONS & CUSTOMIZATIONS: When user asks about addons or customizations for an item, use the addons data already returned in this search_menu response — do NOT call search_menu again. Present the available addon choices (name + price) in text. If the item has hasAddons=true, the addons array contains all options.
+
+MORE OPTIONS: search_menu returns paginated results. Use nextOffset from the response to load more items for the same query. For different dishes, call search_menu with a DIFFERENT query or use get_restaurant_menu to browse categories.
+
+After showing results, let the user review the items and confirm what to add. Do NOT automatically call update_food_cart — wait for the user to decide.
+{
+  "type": "object",
+  "properties": {
+    "addressId": {
+      "type": "string",
+      "description": "REQUIRED: Address ID obtained from get_addresses tool. You MUST call get_addresses first to get this value. Do NOT invent or guess addressId values.",
+      "minLength": 1,
+      "maxLength": 64,
+      "pattern": "^[A-Za-z0-9_-]+$"
+    },
+    "query": {
+      "type": "string",
+      "description": "REQUIRED: Search query (dish name). Cannot be empty. Examples: \"biryani\", \"pizza margherita\", \"paneer tikka\"",
+      "minLength": 1,
+      "maxLength": 256
+    },
+    "restaurantIdOfAddedItem": {
+      "type": "string",
+      "description": "Optional restaurant ID to scope search"
+    },
+    "vegFilter": {
+      "type": "number",
+      "description": "Veg filter flag (0 or 1). Pass 1 for veg-only items. 0 or omitted returns mixed veg + non-veg. There is NO non-veg-only filter \u2014 if user asks for \"non-veg only\", pass 0 (mixed) and mention in text that you are showing all items including non-veg, since a non-veg-only filter is not available yet.",
+      "enum": [
+        0,
+        1
+      ]
+    },
+    "offset": {
+      "type": "number",
+      "description": "Pagination offset. Use nextOffset from previous response to load more results. Default: 0.",
+      "default": 0,
+      "minimum": 0,
+      "maximum": 10000
+    }
+  },
+  "required": [
+    "addressId",
+    "query"
+  ]
+}
+
+=== TOOL: get_restaurant_menu ===
+Get the complete menu of a restaurant, paginated by category. Use this to BROWSE a restaurant menu and see what is available. This is the PRIMARY tool for showing MORE options — use page/pageSize to navigate categories when user asks for more items or wants to explore the menu. All items within each shown category are included. Returns a COMPACT view with dish names, prices, and flags (hasVariants, hasAddons). To ORDER an item, use search_menu with the item name and restaurantId to get full customization details (variants, addons).
+{
+  "type": "object",
+  "properties": {
+    "addressId": {
+      "type": "string",
+      "description": "Address ID from get_addresses tool"
+    },
+    "restaurantId": {
+      "type": "string",
+      "description": "Restaurant ID to fetch menu for (from search_restaurants)"
+    },
+    "page": {
+      "type": "number",
+      "description": "Page number for pagination (default: 1)",
+      "default": 1
+    },
+    "pageSize": {
+      "type": "number",
+      "description": "Number of categories per page (default: 5, max: 8)",
+      "default": 5
+    }
+  },
+  "required": [
+    "addressId",
+    "restaurantId"
+  ]
+}
+
+=== TOOL: get_food_cart ===
+Get current food delivery cart with all items. PRIMARY FOOD DELIVERY SERVICE - Use this to view cart contents when ordering food for delivery. Swiggy Food delivery. Response includes valid_addons field for each item which shows which addons are valid based on the selected variants. Use this to determine which addons can be added. NOT for groceries or restaurant reservations.
+
+💳 PAYMENT: When the user is ready to pay, ask how they want to pay. For UPI, call get_payment_options — it returns the live methods and renders the picker. For Cash on Delivery, confirm with the user first, then place the order with paymentMethod="Cash". Do not assume any method.
+
+COUPON NOTE: The response may include offers.coupon_applied with coupon_discount=0 — this means the coupon is auto-suggested (best available) but NOT actually applied. Do NOT tell the user a coupon is "applied" or show savings unless coupon_discount > 0.
+{
+  "type": "object",
+  "properties": {
+    "addressId": {
+      "type": "string",
+      "description": "Address ID to get accurate delivery charges based on location."
+    },
+    "restaurantName": {
+      "type": "string",
+      "description": "Restaurant name from search_restaurants or search_menu results. Pass this so the cart widget can display the restaurant name (the cart API does not always return it)."
+    }
+  },
+  "required": [
+    "addressId"
+  ]
+}
+
+=== TOOL: update_food_cart ===
+Add items to food delivery cart or update cart contents. PRIMARY FOOD DELIVERY SERVICE - Use this when user wants to add food items, dishes, or meals to their delivery cart. Swiggy Food delivery. Supports variants, variantsV2, and addons for customizing menu items. CRITICAL: Each menu item uses EITHER "variants" OR "variantsV2" format (check search_menu response) - use the SAME format that the item has, never both fields. IMPORTANT: Addon availability depends on variant selection - some addons are only valid for specific variant combinations. After choosing the variant for an item, check the cart response for valid_addons to see which addons are actually available. NOT for groceries or restaurant reservations.
+
+⚠️ NO WIDGET: This tool does NOT render any widget or cart UI. The user CANNOT see the cart after this call. You MUST follow up by calling get_food_cart immediately to show the updated cart to the user. Do NOT say "your cart is shown above" or "cart reflected above" — there is nothing to see until you call get_food_cart.
+
+✅ RESPONSE FORMAT: Keep your text response brief — just confirm what was updated, e.g. "Added 2x Chicken Biryani to your cart." Then immediately call get_food_cart.
+
+💰 COUPON NOTE: The response may include offers.coupon_applied with coupon_discount=0 — this means the coupon is auto-suggested (best available) but NOT actually applied. Do NOT tell the user a coupon is "applied" unless coupon_discount > 0. Only mention savings if there is an actual discount amount.
+
+IMPORTANT — QUANTITY CHANGES FOR CUSTOMIZED ITEMS: When user taps +/- or asks to change quantity of an item that has addons or variants:
+(1) Do NOT silently replicate the same addons for the new quantity.
+(2) ASK the user: "Would you like the same add-ons (e.g. Extra Raita, Salan) for the additional item, or different ones?"
+(3) Also briefly mention other available addons they haven't picked yet — e.g. "You can also add Gulab Jamun or Extra Gravy."
+(4) Only after the user confirms, call update_food_cart with the chosen customization.
+For items WITHOUT addons/variants, quantity changes can be applied directly without asking.
+{
+  "type": "object",
+  "properties": {
+    "restaurantId": {
+      "type": "string",
+      "description": "Restaurant ID for the cart"
+    },
+    "cartItems": {
+      "type": "array",
+      "description": "Array of items to add to cart with their customizations",
+      "items": {
+        "type": "object",
+        "properties": {
+          "menu_item_id": {
+            "type": "string",
+            "description": "Menu item ID from search results"
+          },
+          "quantity": {
+            "type": "number",
+            "description": "Quantity of this item"
+          },
+          "variants": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "variation_id": {
+                  "type": [
+                    "string",
+                    "number"
+                  ],
+                  "description": "Variation ID (snake_case format)"
+                },
+                "variationId": {
+                  "type": [
+                    "string",
+                    "number"
+                  ],
+                  "description": "Variation ID (camelCase format, alternative)"
+                },
+                "group_id": {
+                  "type": [
+                    "string",
+                    "number"
+                  ],
+                  "description": "Group ID (snake_case format)"
+                },
+                "groupId": {
+                  "type": [
+                    "string",
+                    "number"
+                  ],
+                  "description": "Group ID (camelCase format, alternative)"
+                },
+                "name": {
+                  "type": "string",
+                  "description": "Variant name (optional)"
+                },
+                "price": {
+                  "type": [
+                    "string",
+                    "number"
+                  ],
+                  "description": "Variant price (optional)"
+                }
+              },
+              "required": []
+            },
+            "description": "IMPORTANT: Use ONLY if the menu item from search_menu has \"variations\" field. Each menu item has EITHER \"variations\" (use this field) OR \"variantsV2\" (use variantsV2 field below), never both. Check the search_menu response to see which format the item uses. Legacy format variants with group_id and variation_id from the variations array in menu search response."
+          },
+          "variantsV2": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "group_id": {
+                  "type": [
+                    "string",
+                    "number"
+                  ],
+                  "description": "Variant group ID from variantsV2 structure"
+                },
+                "variation_id": {
+                  "type": [
+                    "string",
+                    "number"
+                  ],
+                  "description": "Selected variation ID within the group"
+                }
+              },
+              "required": [
+                "group_id",
+                "variation_id"
+              ]
+            },
+            "description": "IMPORTANT: Use ONLY if the menu item from search_menu has \"variantsV2\" field. Each menu item has EITHER \"variations\" (use variants field above) OR \"variantsV2\" (use this field), never both. Check the search_menu response to see which format the item uses. New format variants with group_id and variation_id from the variantsV2 structure in menu search response."
+          },
+          "addons": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "choice_id": {
+                  "type": [
+                    "string",
+                    "number"
+                  ],
+                  "description": "Addon choice ID (snake_case format)"
+                },
+                "choiceId": {
+                  "type": [
+                    "string",
+                    "number"
+                  ],
+                  "description": "Addon choice ID (camelCase format, alternative)"
+                },
+                "group_id": {
+                  "type": [
+                    "string",
+                    "number"
+                  ],
+                  "description": "Addon group ID (snake_case format)"
+                },
+                "groupId": {
+                  "type": [
+                    "string",
+                    "number"
+                  ],
+                  "description": "Addon group ID (camelCase format, alternative)"
+                },
+                "name": {
+                  "type": "string",
+                  "description": "Addon name (optional)"
+                },
+                "price": {
+                  "type": [
+                    "string",
+                    "number"
+                  ],
+                  "description": "Addon price (optional, can be string like \"30\" or number)"
+                }
+              },
+              "required": []
+            },
+            "description": "Addons - array of selected addon choices. WORKFLOW: (1) First add item with variants only, (2) Check cart response for valid_addons field which shows which addons are valid for your variant selection, (3) Then update cart with valid addons. IMPORTANT: Check minAddons and maxAddons constraints from valid_addons - maxAddons=0 or -1 means UNLIMITED addons allowed, maxAddons>0 means limited to that count. Only send up to maxAddons choices per group in a single call, otherwise the cart may reset silently."
+          }
+        },
+        "required": [
+          "menu_item_id",
+          "quantity"
+        ]
+      }
+    },
+    "addressId": {
+      "type": "string",
+      "description": "Address ID to get accurate delivery charges based on location."
+    },
+    "restaurantName": {
+      "type": "string",
+      "description": "Restaurant name from search_restaurants or search_menu results. Pass this so the cart widget can display the restaurant name (the cart API does not always return it)."
+    },
+    "cutleryOptIn": {
+      "type": "boolean",
+      "description": "True to request cutlery, false to skip. Omit to leave preference unchanged."
+    }
+  },
+  "required": [
+    "restaurantId",
+    "cartItems",
+    "addressId"
+  ]
+}

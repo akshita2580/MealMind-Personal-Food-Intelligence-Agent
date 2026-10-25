@@ -1,10 +1,11 @@
 import logging
+import os
 from typing import Any
 from .mcp_transport import mcp_call, extract_mcp_result
 
 logger = logging.getLogger(__name__)
 
-SWIGGY_INSTAMART_MCP_URL = "https://mcp.swiggy.com/im"
+SWIGGY_INSTAMART_MCP_URL = os.getenv("SWIGGY_INSTAMART_MCP_URL", "https://mcp.swiggy.com/im")
 
 async def _mcp_call(access_token: str, tool_name: str, arguments: dict[str, Any]) -> dict:
     return await mcp_call(access_token, SWIGGY_INSTAMART_MCP_URL, tool_name, arguments)
@@ -21,11 +22,13 @@ async def search_products(access_token: str, address_id: str, query: str, offset
     })
     return _extract_result(resp, "search_products")
 
-async def get_cart(access_token: str, address_id: str) -> dict:
-    """Get the current Instamart cart."""
-    resp = await _mcp_call(access_token, "get_cart", {
-        "addressId": address_id
-    })
+async def get_cart(access_token: str, address_id: str | None = None) -> dict:
+    """Get the current Instamart cart (the MCP tool takes no arguments).
+
+    `address_id` remains optional for compatibility with the Telegram flow;
+    Swiggy's current get_cart schema does not accept it.
+    """
+    resp = await _mcp_call(access_token, "get_cart", {})
     return _extract_result(resp, "get_cart")
 
 async def update_cart(access_token: str, address_id: str, items: list) -> dict:

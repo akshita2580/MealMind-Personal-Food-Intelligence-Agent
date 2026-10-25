@@ -34,8 +34,10 @@ const fetchAPI = async (endpoint: string, options: RequestInit = {}) => {
   });
   
   if (!response.ok) {
-    const error = await response.json().catch(() => ({ detail: 'Unknown error' }));
-    throw new Error(error.detail || `HTTP ${response.status}`);
+    const error = await response.json().catch(() => ({}));
+    const message = error.detail || error.message || error.error || `HTTP ${response.status}`;
+    const details = error.details ? ` (${JSON.stringify(error.details)})` : '';
+    throw new Error(`${message}${details} [HTTP ${response.status}]`);
   }
   
   return response.json();
@@ -216,19 +218,49 @@ export const searchRestaurants = async (addressId: string, query: string) => {
   });
 };
 
-export const getRestaurantMenu = async (restaurantId: string, addressId: string) => {
-  return fetchAPI(`/food/menu/${restaurantId}?address_id=${addressId}`);
+export const getRestaurantMenu = async (restaurantId: string, addressId: string, page = 1, pageSize = 5) => {
+  const query = new URLSearchParams({ address_id: addressId, page: String(page), page_size: String(pageSize) });
+  return fetchAPI(`/food/menu/${encodeURIComponent(restaurantId)}?${query.toString()}`);
+};
+
+export const searchMenu = async (addressId: string, query: string, restaurantId: string, offset = 0) => {
+  const params = new URLSearchParams({ address_id: addressId, query, restaurant_id: restaurantId, offset: String(offset) });
+  return fetchAPI(`/food/menu-search?${params.toString()}`);
 };
 
 export const updateFoodCart = async (
   addressId: string,
   restaurantId: string,
-  itemId: string,
-  quantity: number = 1
+  items: Array<{ menu_item_id: string; quantity: number; variants?: any[]; variantsV2?: any[]; addons?: any[] }>
 ) => {
   return fetchAPI('/food/cart', {
     method: 'POST',
-    body: JSON.stringify({ address_id: addressId, restaurant_id: restaurantId, item_id: itemId, quantity }),
+    body: JSON.stringify({ address_id: addressId, restaurant_id: restaurantId, items }),
+  });
+};
+
+export interface FeeBreakdownItem {
+  label: string;
+  amount: number;
+}
+
+export interface PaymentOptions {
+  breakdown: FeeBreakdownItem[];
+  item_total?: number | null;
+  grand_total: number | null;
+  breakdown_available?: boolean;
+  payment_methods: string[];
+  raw?: unknown;
+}
+
+export const getPaymentOptions = async (
+  addressId: string,
+  restaurantId: string,
+  items: Array<{ menu_item_id: string; quantity: number; variants?: any[]; variantsV2?: any[]; addons?: any[] }>
+): Promise<PaymentOptions> => {
+  return fetchAPI('/food/checkout-summary', {
+    method: 'POST',
+    body: JSON.stringify({ address_id: addressId, restaurant_id: restaurantId, items }),
   });
 };
 
@@ -236,11 +268,39 @@ export const updateFoodCart = async (
 // Instamart
 // ============================================================================
 
+export interface InstamartCartItem {
+  spinId: string;
+  quantity: number;
+}
+
+export interface InstamartCart {
+  success?: boolean;
+  error?: { message?: string };
+  items?: Array<{ spinId: string; quantity: number; product?: any }>;
+  total?: number;
+  item_count?: number;
+}
+
 export const searchProducts = async (addressId: string, query: string, offset: number = 0) => {
   return fetchAPI('/instamart/search', {
     method: 'POST',
     body: JSON.stringify({ address_id: addressId, query, offset }),
   });
+};
+
+export const getInstamartCart = async (): Promise<InstamartCart> => {
+  return fetchAPI('/instamart/cart');
+};
+
+export const updateInstamartCart = async (addressId: string, items: InstamartCartItem[]): Promise<{ success: boolean; error?: { message?: string }; cart: InstamartCart }> => {
+  return fetchAPI('/instamart/cart', {
+    method: 'POST',
+    body: JSON.stringify({ address_id: addressId, items }),
+  });
+};
+
+export const clearInstamartCart = async (): Promise<{ success: boolean; cart: InstamartCart }> => {
+  return fetchAPI('/instamart/cart', { method: 'DELETE' });
 };
 
 // ============================================================================

@@ -129,7 +129,7 @@ async def sync_orders(
 ) -> SyncResult:
     """
     Fetch orders from the Swiggy API using the provided session cookies
-    and persist them into the local SQLite database.
+    and persist them into the configured database.
 
     **Cookies are used only for this request and are never stored.**
     
