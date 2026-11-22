@@ -3,7 +3,7 @@ import { MapPin, Search, UtensilsCrossed, ChevronRight, ArrowLeft, Plus, Shoppin
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
-import { getAddresses, searchRestaurants, getRestaurantMenu, searchMenu, updateFoodCart, getPaymentOptions, type FeeBreakdownItem } from '@/services/api'
+import { getAddresses, searchRestaurants, getRestaurantMenu, searchMenu, updateFoodCart, clearFoodCart, getPaymentOptions, type FeeBreakdownItem } from '@/services/api'
 
 interface Address {
   id: string;
@@ -26,6 +26,7 @@ interface Restaurant {
 interface MenuItem {
   id?: string;
   menu_item_id?: string;
+  menuItemId?: string;
   item_id?: string;
   name?: string;
   item_name?: string;
@@ -51,16 +52,9 @@ interface MenuItem {
 function selectSwiggyCustomizations(item: MenuItem): { variants?: any[]; variantsV2?: any[]; addons?: any[] } | null {
   const choose = (label: string, options: any[]) => {
     const available = options.filter(option => option && option.inStock !== 0)
-    if (available.length === 0) throw new Error(`Swiggy has no available choices for ${label}.`)
-    if (available.length === 1) return available[0]
-    const lines = available.map((option, index) => `${index + 1}. ${option.name || 'Option'}${option.price != null ? ` — ₹${option.price}` : ''}`).join('\n')
-    const answer = window.prompt(`${label}\n${lines}\nEnter the option number:`)
-    if (answer === null) return null
-    const index = Number(answer.trim()) - 1
-    if (!Number.isInteger(index) || index < 0 || index >= available.length) {
-      throw new Error(`Choose a valid option number for ${label}.`)
-    }
-    return available[index]
+    if (available.length === 0) throw new Error(`No available options for ${label}`)
+    // Auto-select first available option (no annoying prompt!)
+    return available[0]
   }
 
   const selected: { variants?: any[]; variantsV2?: any[]; addons?: any[] } = {}
@@ -93,15 +87,10 @@ function selectSwiggyCustomizations(item: MenuItem): { variants?: any[]; variant
     const minimum = Math.max(0, Number(group.minAddons || 0))
     const maximum = Math.max(minimum, Number(group.maxAddons || choices.length))
     if (minimum === 0) continue
-    const lines = choices.map((choice, index) => `${index + 1}. ${choice.name || 'Add-on'}${choice.price != null ? ` — ₹${choice.price}` : ''}`).join('\n')
-    const answer = window.prompt(`${group.groupName || 'Choose required add-ons'} (select ${minimum}${maximum > minimum ? `-${maximum}` : ''}, comma-separated)\n${lines}`)
-    if (answer === null) return null
-    const indexes = [...new Set(answer.split(',').map(value => Number(value.trim()) - 1))]
-    if (indexes.some(index => !Number.isInteger(index) || index < 0 || index >= choices.length) || indexes.length < minimum || indexes.length > maximum) {
-      throw new Error(`Select between ${minimum} and ${maximum} valid add-ons for ${group.groupName || 'this item'}.`)
-    }
-    chosenAddons.push(...indexes.map(index => ({
-      ...choices[index],
+    // Auto-select minimum required addons (first N available)
+    const selected = choices.slice(0, minimum)
+    chosenAddons.push(...selected.map(choice => ({
+      ...choice,
       groupId: group.groupId,
       group_id: group.groupId,
       quantity: 1,
@@ -169,10 +158,12 @@ export default function FoodDelivery() {
     nextCart: Record<string, { item: MenuItem; quantity: number }>,
     addressId = selectedAddress?.id,
     restaurantId = cartRestaurantId || selectedRestaurant?.id,
+    retryCount = 0
   ) => {
     if (!addressId || !restaurantId) return
     const items = Object.entries(nextCart).map(([itemKey, entry]) => {
-      const menuItemId = entry.item.menu_item_id
+      // Check multiple ID field names (matches backend _food_cart_quantities logic)
+      const menuItemId = entry.item.menu_item_id || entry.item.menuItemId || entry.item.item_id || entry.item.id
       if (!menuItemId) throw new Error(`“${entry.item.name || entry.item.item_name || itemKey}” has no Swiggy menu item ID and cannot be synced.`)
       return {
         menu_item_id: String(menuItemId),
@@ -187,13 +178,53 @@ export default function FoodDelivery() {
     // #endregion
 
     beginCartOperation()
-    const queuedSync = cartSyncQueue.current.catch(() => undefined).then(() => updateFoodCart(addressId, restaurantId, items))
-    cartSyncQueue.current = queuedSync
     try {
+      // First clear the cart to remove any leftover items from previous sessions
+      await clearFoodCart(addressId, restaurantId)
+      // Then sync the fresh cart
+      const queuedSync = cartSyncQueue.current.catch(() => undefined).then(() => updateFoodCart(addressId, restaurantId, items))
+      cartSyncQueue.current = queuedSync
       await queuedSync
       setCartSyncError(null)
     } catch (err) {
-      setCartSyncError(err instanceof Error ? err.message : 'Could not sync the full cart to Swiggy')
+      const errorMsg = err instanceof Error ? err.message : 'Could not sync the full cart to Swiggy'
+      // If Swiggy says item was removed, try to re-resolve item IDs via searchMenu (once)
+      const isRemovedError = errorMsg.includes('removed the item') || errorMsg.includes('no valid items')
+      if (isRemovedError && retryCount === 0 && selectedAddress && selectedRestaurant) {
+        console.log('Item may have been removed, re-resolving item IDs via searchMenu...')
+        try {
+          // Re-resolve all items in the cart with fresh searchMenu calls
+          const refreshedCart: Record<string, { item: MenuItem; quantity: number }> = {}
+          for (const [itemKey, entry] of Object.entries(nextCart)) {
+            const itemName = entry.item.name || entry.item.item_name || itemKey
+            const response = await searchMenu(selectedAddress.id, itemName, selectedRestaurant.id)
+            let payload = response
+            for (let depth = 0; depth < 4 && payload && typeof payload === 'object' && !Array.isArray(payload.items); depth += 1) {
+              payload = payload.data || payload.result
+            }
+            const results = Array.isArray(payload?.items) ? payload.items : []
+            const normalize = (value: string) => value.toLowerCase().replace(/[^a-z0-9]/g, '')
+            const match = results.find((candidate: MenuItem) => normalize(candidate.name || candidate.item_name || '') === normalize(itemName))
+            const matchedItemId = match?.menu_item_id || match?.menuItemId || match?.item_id || match?.id
+            if (match && matchedItemId) {
+              const originalPrice = entry.item.price ?? entry.item.item_price
+              const refreshedItem = { ...entry.item, ...match, menu_item_id: matchedItemId, id: matchedItemId }
+              if (originalPrice != null && refreshedItem.price == null && refreshedItem.item_price == null) {
+                refreshedItem.price = originalPrice
+              }
+              refreshedCart[itemKey] = { item: refreshedItem, quantity: entry.quantity }
+            } else {
+              // Keep original if no match found
+              refreshedCart[itemKey] = entry
+            }
+          }
+          // Retry sync with refreshed items (will also clear cart first)
+          return syncCartSnapshot(refreshedCart, addressId, restaurantId, retryCount + 1)
+        } catch (refreshErr) {
+          console.error('Failed to refresh item IDs:', refreshErr)
+        }
+      }
+      setCartSyncError(errorMsg)
       throw err
     } finally {
       finishCartOperation()
@@ -226,10 +257,17 @@ export default function FoodDelivery() {
         const results = Array.isArray(payload?.items) ? payload.items : []
         const normalize = (value: string) => value.toLowerCase().replace(/[^a-z0-9]/g, '')
         const match = results.find((candidate: MenuItem) => normalize(candidate.name || candidate.item_name || '') === normalize(itemName))
-        if (!match?.menu_item_id) {
-          throw new Error(`Swiggy did not return an orderable menu_item_id for “${itemName}”. Refresh the menu and retry.`)
+        // Swiggy returns the orderable item ID under different field names - check all of them
+        const matchedItemId = match?.menu_item_id || match?.menuItemId || match?.item_id || match?.id
+        if (!matchedItemId) {
+          throw new Error(`Swiggy did not return an orderable menu item ID for “${itemName}”. Refresh the menu and retry.`)
         }
-        orderableItem = { ...item, ...match, id: match.menu_item_id }
+        // Preserve price from original menu item since searchMenu may not return it
+        const originalPrice = item.price ?? item.item_price
+        orderableItem = { ...item, ...match, menu_item_id: matchedItemId, id: matchedItemId }
+        if (originalPrice != null && orderableItem.price == null && orderableItem.item_price == null) {
+          orderableItem.price = originalPrice
+        }
         // #region agent log
         fetch('http://127.0.0.1:7268/ingest/7217c377-b554-47f6-b4c0-f0d452589dcd',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'dad6f0'},body:JSON.stringify({sessionId:'dad6f0',hypothesisId:'H1',location:'FoodDelivery.tsx:addToCart:search_menu',message:'search_menu match ids',data:{resultCount:results.length,match:{id:match.id,menu_item_id:match.menu_item_id,item_id:match.item_id,hasVariants:match.hasVariants,hasAddons:match.hasAddons,variationsLen:match.variations?.length||0,variantsV2Len:match.variantsV2?.length||0,variantV2Sample:match.variantsV2?.[0]?{keys:Object.keys(match.variantsV2[0]),groupId:match.variantsV2[0].groupId,name:match.variantsV2[0].name}:null}},timestamp:Date.now(),runId:'pre-fix'})}).catch(()=>{});
         // #endregion
@@ -301,7 +339,8 @@ export default function FoodDelivery() {
 
     try {
       const items = Object.entries(cartRef.current).map(([itemKey, entry]) => {
-        const menuItemId = entry.item.menu_item_id
+        // Check multiple ID field names (matches backend _food_cart_quantities logic)
+        const menuItemId = entry.item.menu_item_id || entry.item.menuItemId || entry.item.item_id || entry.item.id
         if (!menuItemId) throw new Error(`“${entry.item.name || entry.item.item_name || itemKey}” has no Swiggy menu item ID and cannot be synced.`)
         return {
           menu_item_id: String(menuItemId),

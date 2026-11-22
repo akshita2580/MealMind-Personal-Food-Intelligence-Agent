@@ -172,6 +172,68 @@ def _clean_cart_item(item: dict, id_as_int: bool = False, include_aliases: bool 
     return cleaned
 
 
+async def _check_item_availability(access_token: str, address_id: str, menu_item_id: str) -> dict:
+    """Check if a menu item is still available by fetching the cart."""
+    cart = await get_food_cart(access_token, address_id)
+    items = cart.get("items", []) if isinstance(cart, dict) else []
+    for item in items:
+        item_id = str(item.get("menu_item_id") or item.get("menuItemId") or item.get("id") or "")
+        if item_id == str(menu_item_id):
+            return {
+                "available": True,
+                "valid_addons": item.get("valid_addons", []),
+                "availability_status": item.get("availabilityStatus", "UNKNOWN"),
+                "quantity": item.get("quantity", 0),
+            }
+    return {"available": False, "valid_addons": [], "availability_status": "NOT_IN_CART", "quantity": 0}
+
+
+async def update_food_cart_with_validation(access_token: str, restaurant_id: str, cart_items: list, address_id: str) -> dict:
+    """
+    Update food cart after validating item availability.
+    Checks if items are still in cart and available before updating.
+    """
+    for item in cart_items:
+        if not isinstance(item, dict):
+            continue
+        menu_item_id = (
+            item.get("menu_item_id")
+            or item.get("menuItemId")
+            or item.get("id")
+            or item.get("itemId")
+        )
+        if menu_item_id:
+            availability = await _check_item_availability(access_token, address_id, str(menu_item_id))
+            if not availability["available"]:
+                raise RuntimeError(
+                    f"Item {menu_item_id} is no longer available (status: {availability['availability_status']}). "
+                    "Please refresh the menu and try again."
+                )
+            if availability["availability_status"] != "AVAILABLE":
+                raise RuntimeError(
+                    f"Item {menu_item_id} is currently {availability['availability_status'].lower()}. "
+                    "Please choose a different item or variant."
+                )
+
+    cleaned = [_clean_cart_item(i) for i in cart_items if isinstance(i, dict)]
+    cleaned = [i for i in cleaned if i]
+    # #region agent log
+    try:
+        import json, time
+        with open(r"c:\Users\Akshita\Desktop\MealMind-Personal-Food-Intelligence-Agent\debug-dad6f0.log", "a", encoding="utf-8") as fh:
+            fh.write(json.dumps({"sessionId":"dad6f0","runId":"pre-fix","hypothesisId":"H5","location":"swiggy_mcp_client.py:update_food_cart","message":"cleaned MCP cartItems","data":{"mcp_url":SWIGGY_FOOD_MCP_URL,"restaurant_id":str(restaurant_id),"cleaned":cleaned},"timestamp":int(time.time()*1000)}, default=str)+"\n")
+    except Exception:
+        pass
+    # #endregion
+    resp = await _mcp_call(access_token, "update_food_cart", {
+        "restaurantId": str(restaurant_id),
+        "cartItems": cleaned,
+        "addressId": str(address_id),
+        "cutleryOptIn": False,
+    })
+    return _extract_result(resp, "update_food_cart")
+
+
 async def update_food_cart(access_token: str, restaurant_id: str, cart_items: list, address_id: str) -> dict:
     """
     Standard official schema for Swiggy Food MCP update_food_cart.

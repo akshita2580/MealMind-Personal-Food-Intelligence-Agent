@@ -23,14 +23,16 @@ from contextlib import asynccontextmanager
 from typing import AsyncGenerator
 
 from dotenv import load_dotenv
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
 
 from .api import router as api_router
 from .api_web import router as api_web_router
 from .database import create_db_and_tables
 from .error_handlers import register_error_handlers
 from .mcp_server import mcp
-from .telegram_bot import build_telegram_app
 from fastapi.middleware.cors import CORSMiddleware
 
 # ---------------------------------------------------------------------------
@@ -41,6 +43,27 @@ try:
 except Exception:
     # .env file is optional - continue without it
     pass
+
+# ---------------------------------------------------------------------------
+# Environment validation
+# ---------------------------------------------------------------------------
+def validate_environment() -> None:
+    """Validate required environment variables on startup."""
+    env = os.getenv("ENVIRONMENT", "development").lower()
+    
+    # Check ENCRYPTION_KEY in production
+    if env in ("production", "prod"):
+        if not os.getenv("ENCRYPTION_KEY"):
+            raise RuntimeError("FATAL: ENCRYPTION_KEY must be set in production environment")
+    
+    # Validate DATABASE_URL format
+    db_url = os.getenv("DATABASE_URL", "data/swiggy.db")
+    if "://" in db_url and not db_url.startswith(("sqlite://", "postgresql://", "postgres://", "postgresql+psycopg://")):
+        logging.warning(f"Unusual DATABASE_URL scheme: {db_url.split('://')[0]}")
+    
+    logging.info(f"Environment validation passed (env={env})")
+
+validate_environment()
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -62,20 +85,34 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # Ensure database and tables exist before handling requests
     create_db_and_tables()
     
-    # Start Telegram bot polling
-    tg_app = build_telegram_app()
-    if tg_app:
-        await tg_app.initialize()
-        await tg_app.start()
-        await tg_app.updater.start_polling(drop_pending_updates=True)
-        
+    # Clean up expired sessions periodically
+    try:
+        from .database import get_session
+        from .api_web import cleanup_expired_sessions
+        with get_session() as db:
+            cleaned = await cleanup_expired_sessions(db)
+            if cleaned > 0:
+                logging.info(f"Cleaned up {cleaned} expired web sessions on startup")
+    except Exception as e:
+        logging.warning(f"Failed to clean up expired sessions on startup: {e}")
+    
+    # Start Swiggy auto-sync scheduler
+    try:
+        from .services.scheduler import start_scheduler
+        start_scheduler()
+        logging.info("Swiggy auto-sync scheduler started")
+    except Exception as e:
+        logging.warning(f"Failed to start Swiggy auto-sync scheduler: {e}")
+    
     yield
     
-    # Teardown Telegram bot
-    if tg_app:
-        await tg_app.updater.stop()
-        await tg_app.stop()
-        await tg_app.shutdown()
+    # Shutdown scheduler on app exit
+    try:
+        from .services.scheduler import stop_scheduler
+        stop_scheduler()
+        logging.info("Swiggy auto-sync scheduler stopped")
+    except Exception as e:
+        logging.warning(f"Failed to stop Swiggy auto-sync scheduler: {e}")
 
 
 app = FastAPI(
@@ -89,18 +126,29 @@ app = FastAPI(
 )
 
 # Add CORS middleware for frontend
+frontend_url = os.getenv("FRONTEND_URL", "http://localhost:5173")
+cors_origins = [
+    frontend_url,
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+]
+# Remove duplicates while preserving order
+cors_origins = list(dict.fromkeys(cors_origins))
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:5173",
-        "http://127.0.0.1:5173",
-        "http://localhost:3000",
-        "http://127.0.0.1:3000",
-    ],
+    allow_origins=cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Add rate limiting
+limiter = Limiter(key_func=get_remote_address, default_limits=["100/minute"])
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 # Register custom error handlers (requirement 8.8, 10.6, 12.4, 12.6)
 register_error_handlers(app)

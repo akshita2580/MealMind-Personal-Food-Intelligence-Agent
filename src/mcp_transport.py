@@ -53,11 +53,12 @@ async def mcp_call(access_token: str, base_url: str, tool_name: str, arguments: 
     for attempt in range(1, _MCP_MAX_RETRIES + 1):
         try:
             async with httpx.AsyncClient() as client:
-                req_timeout = httpx.Timeout(10.0, read=15.0)
+                # Increased timeouts for slow network conditions
+                req_timeout = httpx.Timeout(30.0, read=60.0, connect=10.0)
 
                 response = await asyncio.wait_for(
                     client.post(base_url, json=payload, headers=headers, timeout=req_timeout),
-                    timeout=20.0,
+                    timeout=90.0,
                 )
 
                 if response.status_code == 401:
@@ -67,7 +68,8 @@ async def mcp_call(access_token: str, base_url: str, tool_name: str, arguments: 
                 elif response.status_code == 406:
                     raise RuntimeError(f"Swiggy MCP {tool_name} error: Protocol/request format issue.")
                 elif response.status_code >= 500:
-                    raise RuntimeError(f"Swiggy MCP {tool_name} error: Temporary Swiggy failure (HTTP {response.status_code}).")
+                    error_body = response.text[:500]
+                    raise RuntimeError(f"Swiggy MCP {tool_name} error: HTTP {response.status_code}: {error_body or 'empty response body'}")
 
                 response.raise_for_status()
 
@@ -173,10 +175,19 @@ def _decode_mcp_response(response: httpx.Response, tool_name: str) -> dict[str, 
             continue
         field, separator, value = line.partition(":")
         if separator and field == "data":
+            # Handle multi-line data values (value may start with space)
             data_lines.append(value[1:] if value.startswith(" ") else value)
+        elif separator and field == "event":
+            # Track event type if needed
+            pass
 
     if not events:
-        raise RuntimeError(f"Swiggy MCP {tool_name} error: Event stream contained no JSON-RPC response.")
+        # Try to parse the entire response as a single JSON object
+        # This handles cases where SSE is not properly formatted
+        try:
+            return json.loads(response.text)
+        except json.JSONDecodeError:
+            raise RuntimeError(f"Swiggy MCP {tool_name} error: Event stream contained no JSON-RPC response.")
     return next((event for event in events if "result" in event or "error" in event), events[-1])
 
 def extract_mcp_result(response: dict, tool_name: str) -> Any:
