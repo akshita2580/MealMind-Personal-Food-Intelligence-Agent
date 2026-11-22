@@ -52,7 +52,7 @@ export default function OAuthCallback() {
             const result = await syncOrders()
             console.log('OAuthCallback: Sync complete', result)
             toast.success('Welcome! Your orders have been synced from Swiggy.', {
-              description: `${result.synced_orders || 0} orders synced successfully.`
+              description: `${result.orders_received || 0} orders synced successfully.`
             })
           } catch (err) {
             console.error('OAuthCallback: Auto-sync failed', err)
