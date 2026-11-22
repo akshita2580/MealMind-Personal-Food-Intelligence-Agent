@@ -67,13 +67,21 @@ def _parse_order_time(order_time_str: str) -> datetime | None:
         
     # fallback formats for Swiggy's human-readable dates
     formats = [
-        "%B %d, %I:%M %p", # e.g. "February 12, 9:08 PM"
+        "%B %d, %I:%M %p",    # e.g. "February 12, 9:08 PM"
+        "%B %d, %-I:%M %p",   # e.g. "October 12, 0:07 AM" (no leading zero)
         "%b %d, %I:%M %p",
         "%B %d %Y, %I:%M %p",
     ]
+    
+    # Windows doesn't support %-I, so we need to manually strip leading zeros
+    modified_time_str = order_time_str
+    # Replace leading zero in hour (e.g., "0:07 AM" -> "12:07 AM")
+    import re
+    modified_time_str = re.sub(r', 0:(\d{2} [AP]M)', r', 12:\1', modified_time_str)
+    
     for fmt in formats:
         try:
-            dt = datetime.strptime(order_time_str, fmt)
+            dt = datetime.strptime(modified_time_str, fmt)
             if dt.year == 1900:
                 now = datetime.now()
                 # If the parsed month is in the future compared to now, 

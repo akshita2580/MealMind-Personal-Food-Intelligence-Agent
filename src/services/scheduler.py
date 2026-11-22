@@ -103,9 +103,17 @@ class SwiggyAutoSyncScheduler:
             logger.debug(f"User {user_id} has no active Swiggy connection")
             return
         
-        if conn.expires_at and conn.expires_at < datetime.now(timezone.utc):
-            logger.info(f"User {user_id} Swiggy token expired")
-            return
+        # Fix timezone comparison - make expires_at timezone-aware if needed
+        if conn.expires_at:
+            # Ensure expires_at is timezone-aware
+            if conn.expires_at.tzinfo is None:
+                expires_at_utc = conn.expires_at.replace(tzinfo=timezone.utc)
+            else:
+                expires_at_utc = conn.expires_at
+            
+            if expires_at_utc < datetime.now(timezone.utc):
+                logger.info(f"User {user_id} Swiggy token expired")
+                return
         
         # Check if we synced recently (avoid too frequent syncs)
         recent_sync = db.exec(

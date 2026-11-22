@@ -299,19 +299,21 @@ async def swiggy_oauth_callback(
             
         conn = session.exec(select(SwiggyConnection).where(SwiggyConnection.user_id == user.id)).first()
         expires_at = datetime.now(timezone.utc) + timedelta(seconds=int(expires_in))
+        # Store timezone-naive for database compatibility
+        expires_at_naive = expires_at.replace(tzinfo=None)
         
         if not conn:
             conn = SwiggyConnection(
                 user_id=user.id,
                 status="CONNECTED",
                 access_token=encrypt_token(access_token),
-                expires_at=expires_at
+                expires_at=expires_at_naive
             )
             session.add(conn)
         else:
             conn.status = "CONNECTED"
             conn.access_token = encrypt_token(access_token)
-            conn.expires_at = expires_at
+            conn.expires_at = expires_at_naive
             conn.updated_at = datetime.now(timezone.utc)
             session.add(conn)
             
