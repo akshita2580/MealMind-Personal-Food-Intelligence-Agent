@@ -5,7 +5,6 @@
   <p>
     <a href="https://www.python.org/downloads/"><img src="https://img.shields.io/badge/python-3.10+-blue.svg" alt="Python 3.10+"></a>
     <a href="https://fastapi.tiangolo.com/"><img src="https://img.shields.io/badge/FastAPI-0.115+-009688.svg?logo=fastapi&logoColor=white" alt="FastAPI"></a>
-    <a href="https://core.telegram.org/bots/api"><img src="https://img.shields.io/badge/Telegram-Bot%20API-2CA5E0.svg?logo=telegram&logoColor=white" alt="Telegram Bot"></a>
     <a href="https://sqlmodel.tiangolo.com/"><img src="https://img.shields.io/badge/SQLModel-Database-black.svg" alt="SQLModel"></a>
     <a href="https://opensource.org/licenses/MIT"><img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="License: MIT"></a>
   </p>
@@ -15,9 +14,9 @@
 
 ## 📖 Overview
 
-**MealMind** is a comprehensive, AI-powered food intelligence agent built around the Swiggy ecosystem (Food Delivery, Instamart Groceries, and Dineout Reservations). 
+**MealMind** is a comprehensive, AI-powered food intelligence agent built around the Swiggy ecosystem (Food Delivery, Instamart Groceries, and Dineout Reservations).
 
-By integrating directly with Swiggy's official **Builders Club Model Context Protocol (MCP) servers**, MealMind allows you to order food, buy groceries, book tables, and analyze your spending habits entirely from a seamless **Telegram conversational interface** or from your favorite AI IDE (like Cursor/Claude Desktop).
+By integrating directly with Swiggy's official **Builders Club Model Context Protocol (MCP) servers**, MealMind allows you to order food, buy groceries, book tables, and analyze your spending habits entirely from a modern **React web application** or from your favorite AI IDE (like Cursor/Claude Desktop).
 
 ---
 
@@ -25,7 +24,7 @@ By integrating directly with Swiggy's official **Builders Club Model Context Pro
 
 | Vertical | Features | Status |
 | :--- | :--- | :---: |
-| 🍕 **Food Delivery** | Restaurant search, interactive menus, cart management, and seamless Telegram checkout (UPI/Cash). | ✅ |
+| 🍕 **Food Delivery** | Restaurant search, interactive menus, cart management, and seamless web checkout (UPI/Cash). | ✅ |
 | 🥦 **Instamart** | Grocery product search, variation parsing, isolated cart session, and order placement. | ✅ |
 | 🍽️ **Dineout** | Location-based venue search, dynamic date/time slot fetching, guest count configuration, and secure table booking. | ✅ |
 | 🧠 **Intelligence** | Background syncing of order history, peak ordering analytics, monthly trend analysis, and custom insights engine. | ✅ |
@@ -38,13 +37,13 @@ MealMind operates with a dual-architecture design. It **consumes** Swiggy's exte
 
 ```mermaid
 graph TD
-    User([👤 User]) -->|Telegram Commands/Buttons| TelegramBot[🤖 Telegram Bot UI]
+    User([👤 User]) -->|Web UI| ReactApp[⚛️ React Frontend]
     User -->|Prompts| ExtAI[🧠 External AI Assistant<br>e.g. Cursor, Claude]
     
-    TelegramBot <-->|OAuth 2.1 / DCR| SwiggyAuth[🔐 Swiggy Authentication]
-    TelegramBot -->|State Machines| UI_Flows[🔀 Conversational Flows<br>Food, Instamart, Dineout]
+    ReactApp <-->|OAuth 2.1 / DCR| SwiggyAuth[🔐 Swiggy Authentication]
+    ReactApp -->|REST API| FastAPI[🚀 FastAPI Backend]
     
-    UI_Flows --> MCP_Transport[🚀 mcp_transport.py<br>Robust JSON-RPC Client]
+    FastAPI --> MCP_Transport[🚀 mcp_transport.py<br>Robust JSON-RPC Client]
     
     MCP_Transport -->|JSON-RPC| SwiggyFood(🍔 mcp.swiggy.com/food)
     MCP_Transport -->|JSON-RPC| SwiggyIM(🥦 mcp.swiggy.com/im)
@@ -52,14 +51,15 @@ graph TD
     
     ExtAI <-->|Local JSON-RPC| CustomMCP[🖥️ MealMind Custom MCP Server]
     CustomMCP <--> InsightEngine[📊 Insight Engine & DB]
-    UI_Flows <--> InsightEngine
+    FastAPI <--> InsightEngine
 ```
 
 ### 🧩 Component Breakdown
 
-1. **Presentation Layer (Telegram UI)**
-   - Built on `python-telegram-bot` leveraging `ConversationHandler`.
-   - `food_ordering_flow.py`, `instamart_ordering_flow.py`, and `dineout_booking_flow.py` act as completely isolated state machines ensuring robust UX without cross-contamination.
+1. **Presentation Layer (React Web UI)**
+   - Modern React + TypeScript + Tailwind CSS frontend
+   - Interactive cart management with real-time Swiggy cart synchronization
+   - Multi-schema cart update fallback for robust Swiggy API compatibility
 
 2. **Swiggy Integration Layer**
    - **`mcp_transport.py`**: A hardened generic HTTP/JSON-RPC client that handles strict `asyncio` timeouts, exception translation, and varied content extraction formats.
@@ -69,6 +69,7 @@ graph TD
    - **Dynamic Client Registration (`dcr.py`)**: Automatically negotiates and registers the OAuth client with Swiggy on startup.
    - **Token Encryption (`security.py`)**: OAuth tokens (`SwiggyConnection`) are encrypted at rest using `cryptography.fernet`.
    - **`insight_engine.py`**: Aggregates historical order data to rank top dishes, analyze peak hours, and generate LLM-friendly insight reports.
+   - **PostgreSQL**: Primary database for production deployments (SQLite supported for local development).
 
 ---
 
@@ -76,31 +77,50 @@ graph TD
 
 ### 1. Prerequisites
 - **Python 3.10+**
-- A **Telegram Bot Token** (Create one via [@BotFather](https://t.me/BotFather))
-- (Local Testing) A tunneling service like **ngrok** to receive OAuth callbacks.
+- **PostgreSQL 14+** (or use SQLite for local development)
+- **Node.js 18+** (for React frontend)
 
 ### 2. Environment Configuration
 Create a `.env` file in the project root:
 
 ```env
+# Database Configuration (PostgreSQL)
+# Example for local PostgreSQL; use your provider's URL in deployment.
+# Format: postgresql+psycopg://user:password@host:port/database
+DATABASE_URL=postgresql+psycopg://postgres:password@localhost:5432/mealmind
+
+# Server Configuration
+PORT=8000
+
+# Swiggy API Configuration
+SWIGGY_API_URL=https://www.swiggy.com/dapi/order/all
+REQUEST_TIMEOUT=30
+
+# OAuth Canonical Callback URI
+# Default: http://127.0.0.1:8000/api/auth/swiggy/callback
+SWIGGY_REDIRECT_URI=http://127.0.0.1:8000/api/auth/swiggy/callback
+
 # Environment (development or production)
 ENVIRONMENT=development
 
-# Telegram Bot Token
-TELEGRAM_TOKEN=your_telegram_bot_token_here
+# Encryption Key for securing tokens (Required in production)
+# Generate with: python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+ENCRYPTION_KEY=
 
-# FastAPI Webhook/OAuth Settings
-PORT=8000
-# IMPORTANT: This must match your public tunneling URL for OAuth to succeed.
-SWIGGY_REDIRECT_URI=https://your-ngrok-url.app/api/auth/swiggy/callback
-
-# (Required in Production) Base64 URL-safe string for encrypting DB tokens
-# ENCRYPTION_KEY=... 
+# Official Swiggy MCP servers
+SWIGGY_FOOD_MCP_URL=https://mcp.swiggy.com/food
+SWIGGY_INSTAMART_MCP_URL=https://mcp.swiggy.com/im
+SWIGGY_DINEOUT_MCP_URL=https://mcp.swiggy.com/dineout
 ```
 
-Set `DATABASE_URL` to your PostgreSQL connection URL. For an existing SQLite database, install the requirements and run `python scripts/migrate_sqlite_to_postgres.py` after configuring that URL. The migration copies `data/swiggy.db` into empty PostgreSQL tables and leaves the SQLite file untouched.
+For an existing SQLite database, install the requirements and run:
+```bash
+python scripts/migrate_sqlite_to_postgres.py
+```
+after configuring `DATABASE_URL` to your PostgreSQL URL. The migration copies `data/swiggy.db` into empty PostgreSQL tables and leaves the SQLite file untouched.
 
 ### 3. Installation & Boot
+
 ```bash
 # Clone the repository
 git clone https://github.com/yourusername/mealmind.git
@@ -110,38 +130,47 @@ cd mealmind
 python -m venv .venv
 source .venv/bin/activate  # On Windows: .venv\Scripts\activate
 
-# Install dependencies
+# Install Python dependencies
 pip install -r requirements.txt
 
-# Start the unified server (FastAPI + Telegram Bot)
+# Install frontend dependencies
+cd frontend
+npm install
+cd ..
+
+# Start the backend server
 python -m src.main
+
+# In another terminal, start the frontend dev server
+cd frontend
+npm run dev
 ```
 
 ### 4. Connect & Play
-1. Open your bot in Telegram and send `/start`.
-2. Click **Connect Swiggy** to initiate the secure OAuth flow.
-3. Once authenticated, explore the interactive menus to order food, book tables, or view your personal food insights!
+1. Open http://localhost:5173 in your browser
+2. Click **Connect Swiggy** to initiate the secure OAuth flow
+3. Once authenticated, explore the web interface to order food, book tables, or view your personal food insights!
 
 ---
 
 ## 🛡️ Security & Tenant Isolation
 
 Enterprise-grade security is baked into MealMind:
-- **Zero-Leakage Design:** The `get_user_access_token(telegram_id)` strictly isolates sessions. One user cannot trigger orders or view data on another user's Swiggy account.
+- **Zero-Leakage Design:** The `get_user_token(user, db)` strictly isolates sessions. One user cannot trigger orders or view data on another user's Swiggy account.
 - **Encrypted Storage:** User tokens are never stored in plaintext. They are encrypted at rest using Fernet symmetric encryption.
-- **Explicit Consent:** No automatic order placement or table booking is permitted by the system. The bot explicitly renders cart totals and requires a final tap confirmation before triggering any state-mutating MCP commands (e.g. `checkout` or `book_table`).
+- **Explicit Consent:** No automatic order placement or table booking is permitted by the system. The UI explicitly renders cart totals and requires a final tap confirmation before triggering any state-mutating MCP commands (e.g. `checkout` or `book_table`).
 
 ---
 
 ## 🧪 Testing
 
-MealMind ships with a comprehensive mock testing suite that verifies state machine transitions, edge cases, and MCP error handling without hitting production endpoints.
+MealMind ships with a comprehensive mock testing suite that verifies API endpoints, edge cases, and MCP error handling without hitting production endpoints.
 
 ```bash
 # Install test dependencies
 pip install pytest pytest-asyncio
 
-# Run the test suite (67+ passing tests)
+# Run the test suite
 pytest -v
 ```
 

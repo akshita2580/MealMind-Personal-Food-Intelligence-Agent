@@ -13,11 +13,16 @@ import urllib.parse
 from datetime import datetime, timezone, timedelta
 
 from .database import get_session
-from .models import User, SwiggyConnection, OAuthState
+from .models import (
+    User, SwiggyConnection, OAuthState, WebSession,
+    SwiggySyncLog, SwiggyFoodItemMapping, MealMindFood, DailyNutritionLog,
+    SwiggySyncStatus, SyncOrdersFromSwiggyResult, CartSyncFromMealPlanResult, MealPlanCartRequest
+)
 from .security import decrypt_token, generate_oauth_state, generate_pkce_verifier, generate_pkce_challenge
 from . import swiggy_mcp_client
 from . import swiggy_instamart_mcp
 from . import swiggy_dineout_mcp
+from .services.sync_service import SwiggySyncService
 
 router = APIRouter(prefix="/api", tags=["Web UI"])
 
@@ -34,14 +39,70 @@ def _get_db_session() -> Generator[Session, None, None]:
 # Session management
 # -------------------------------------------------------------------------
 
-# In-memory session store (use Redis in production)
-sessions: dict[str, dict] = {}
+from .models import WebSession
 
 def generate_session_id() -> str:
     """Generate a secure session ID."""
     return secrets.token_urlsafe(32)
 
-def get_current_user(
+async def create_web_session(user_id: int, db: Session, expires_in_days: int = 30) -> str:
+    """Create a new persistent web session for a user."""
+    session_id = generate_session_id()
+    now = datetime.now(timezone.utc)
+    expires_at = now + timedelta(days=expires_in_days)
+    
+    web_session = WebSession(
+        id=session_id,
+        user_id=user_id,
+        created_at=now,
+        expires_at=expires_at,
+        last_used_at=now,
+    )
+    db.add(web_session)
+    db.commit()
+    return session_id
+
+async def get_web_session(session_id: str, db: Session) -> WebSession | None:
+    """Get a web session by ID, checking expiry."""
+    if not session_id:
+        return None
+    now = datetime.now(timezone.utc)
+    session = db.exec(
+        select(WebSession).where(
+            WebSession.id == session_id,
+            WebSession.expires_at > now
+        )
+    ).first()
+    if session:
+        # Update last_used_at
+        session.last_used_at = now
+        db.add(session)
+        db.commit()
+    return session
+
+async def delete_web_session(session_id: str, db: Session) -> bool:
+    """Delete a web session (logout)."""
+    if not session_id:
+        return False
+    session = db.exec(select(WebSession).where(WebSession.id == session_id)).first()
+    if session:
+        db.delete(session)
+        db.commit()
+        return True
+    return False
+
+async def cleanup_expired_sessions(db: Session) -> int:
+    """Clean up expired web sessions. Returns count of deleted sessions."""
+    now = datetime.now(timezone.utc)
+    expired = db.exec(select(WebSession).where(WebSession.expires_at <= now)).all()
+    count = len(expired)
+    for session in expired:
+        db.delete(session)
+    if count > 0:
+        db.commit()
+    return count
+
+async def get_current_user(
     request: Request,
     session_id: Annotated[str | None, Cookie()] = None,
     db: Session = Depends(_get_db_session)
@@ -51,14 +112,16 @@ def get_current_user(
     if not session_id:
         session_id = request.headers.get("X-Session-ID")
 
-    if not session_id or session_id not in sessions:
+    if not session_id:
         return None
-    user_id = sessions[session_id].get("user_id")
-    if not user_id:
+    
+    web_session = await get_web_session(session_id, db)
+    if not web_session:
         return None
-    return db.exec(select(User).where(User.id == user_id)).first()
+    
+    return db.exec(select(User).where(User.id == web_session.user_id)).first()
 
-def require_auth(user: User | None = Depends(get_current_user)) -> User:
+async def require_auth(user: User | None = Depends(get_current_user)) -> User:
     """Require authentication, raise 401 if not logged in."""
     if not user:
         raise HTTPException(status_code=401, detail="Not authenticated")
@@ -372,7 +435,8 @@ async def init_oauth_web():
 async def auth_status(
     request: Request,
     user: User | None = Depends(get_current_user),
-    session_id: Annotated[str | None, Cookie()] = None
+    session_id: Annotated[str | None, Cookie()] = None,
+    db: Session = Depends(_get_db_session)
 ):
     """Check if user is authenticated."""
     import logging
@@ -382,29 +446,37 @@ async def auth_status(
     all_cookies = request.cookies
     logger.info(f"Auth check - All cookies received: {all_cookies}")
     logger.info(f"Auth check - session_id from cookie: {session_id}")
-    logger.info(f"Active sessions: {list(sessions.keys())}")
-    logger.info(f"Session details: {sessions}")
     logger.info(f"User found: {user is not None}")
+
+    # Check session validity in database
+    session_valid = False
+    if session_id:
+        web_session = await get_web_session(session_id, db)
+        session_valid = web_session is not None
 
     return {
         "authenticated": user is not None,
         "user_id": user.id if user else None,
         "session_id_present": session_id is not None,
-        "session_valid": session_id in sessions if session_id else False,
+        "session_valid": session_valid,
         "debug": {
             "cookies_received": list(all_cookies.keys()),
-            "active_sessions_count": len(sessions)
         }
     }
 
 @router.post("/auth/logout")
 async def logout(
+    request: Request,
     session_id: Annotated[str | None, Cookie()] = None,
-    response: Response = None
+    response: Response = None,
+    db: Session = Depends(_get_db_session)
 ):
     """Logout and clear session."""
-    if session_id and session_id in sessions:
-        del sessions[session_id]
+    if not session_id:
+        session_id = request.headers.get("X-Session-ID")
+    
+    if session_id:
+        await delete_web_session(session_id, db)
 
     if response:
         response.delete_cookie(key="session_id")
@@ -567,26 +639,32 @@ async def update_food_cart(
     """Update food cart."""
     import logging
     logger = logging.getLogger(__name__)
-    
+
     token = get_user_token(user, db)
     if not token:
         raise HTTPException(status_code=400, detail="Not connected to Swiggy")
-    
+
     restaurant_id = request_body.get("restaurant_id")
     cart_items = request_body.get("cart_items", [])
     address_id = request_body.get("address_id")
-    
+
+    if not restaurant_id or not address_id:
+        raise HTTPException(status_code=422, detail="restaurant_id and address_id are required")
+
     logger.info(f"=== FOOD CART UPDATE DEBUG ===")
     logger.info(f"Restaurant ID: {restaurant_id}")
     logger.info(f"Address ID: {address_id}")
     logger.info(f"Items count: {len(cart_items)}")
     logger.info(f"Token length: {len(token) if token else 0}")
-    
+
+    # Allow empty cart_items for clearing cart, but validate for updates
+    is_clear = len(cart_items) == 0
+
     try:
         result = await swiggy_mcp_client.update_food_cart(
-            token, 
-            restaurant_id, 
-            cart_items, 
+            token,
+            restaurant_id,
+            cart_items,
             address_id
         )
         logger.info(f"Cart update successful: {result}")
@@ -598,6 +676,43 @@ async def update_food_cart(
         raise HTTPException(
             status_code=502,
             detail=f"Unable to update Swiggy food cart: {str(e)}"
+        )
+
+
+@router.delete("/food/cart")
+async def clear_food_cart(
+    request_body: dict,
+    user: User = Depends(require_auth),
+    db: Session = Depends(_get_db_session)
+):
+    """Clear food cart using flush_food_cart."""
+    import logging
+    logger = logging.getLogger(__name__)
+
+    token = get_user_token(user, db)
+    if not token:
+        raise HTTPException(status_code=400, detail="Not connected to Swiggy")
+
+    address_id = request_body.get("address_id")
+
+    if not address_id:
+        raise HTTPException(status_code=422, detail="address_id is required")
+
+    logger.info(f"=== FOOD CART CLEAR DEBUG ===")
+    logger.info(f"Address ID: {address_id}")
+
+    try:
+        # Use flush_food_cart to clear the cart (doesn't require restaurant_id)
+        result = await swiggy_mcp_client.flush_food_cart(token)
+        logger.info(f"Cart clear successful: {result}")
+        return {"success": True, "message": "Cart cleared", "result": result}
+    except Exception as e:
+        logger.exception(f"Cart clear failed")
+        logger.error(f"Error type: {type(e).__name__}")
+        logger.error(f"Error message: {str(e)}")
+        raise HTTPException(
+            status_code=502,
+            detail=f"Unable to clear Swiggy food cart: {str(e)}"
         )
 
 
@@ -971,6 +1086,83 @@ async def get_food_payment_options(
         "cart_items": live_items if isinstance(live_items, list) else None,
     }
 
+
+@router.post("/food/place-order")
+async def place_food_order(
+    request_body: dict,
+    user: User = Depends(require_auth),
+    db: Session = Depends(_get_db_session),
+):
+    """Place food order on Swiggy."""
+    import logging
+    logger = logging.getLogger(__name__)
+
+    token = get_user_token(user, db)
+    if not token:
+        raise HTTPException(status_code=400, detail="Not connected to Swiggy")
+
+    address_id = request_body.get("address_id")
+    restaurant_id = request_body.get("restaurant_id")
+    items = request_body.get("items", [])
+    payment_method = request_body.get("payment_method", "Cash")
+
+    if not address_id or not restaurant_id or not items:
+        raise HTTPException(status_code=422, detail="address_id, restaurant_id, and items are required")
+
+    # First sync the cart to ensure items are on Swiggy
+    try:
+        normalized_items = []
+        for item in items:
+            if not isinstance(item, dict):
+                raise HTTPException(status_code=422, detail="Each cart item must be an object")
+            item_id = item.get("menu_item_id") or item.get("menuItemId") or item.get("id")
+            quantity = item.get("quantity")
+            if not item_id or not isinstance(quantity, int) or quantity < 1:
+                raise HTTPException(status_code=422, detail="Each cart item needs a menu_item_id and positive integer quantity")
+            normalized = {"menu_item_id": str(item_id), "quantity": quantity}
+            for customization in ("variants", "variantsV2", "addons"):
+                if isinstance(item.get(customization), list):
+                    normalized[customization] = item[customization]
+            normalized_items.append(normalized)
+
+        # Clear cart first to prevent duplicate addons from multi-schema retries
+        await swiggy_mcp_client.flush_food_cart(token)
+
+        # Sync cart with Swiggy using the robust multi-schema approach
+        await _update_food_cart_and_confirm(token, str(restaurant_id), str(address_id), normalized_items)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("Cart sync failed before order placement")
+        raise HTTPException(status_code=502, detail=f"Failed to sync cart: {e}") from e
+
+    # Now place the order
+    try:
+        order_result = await swiggy_mcp_client.place_food_order(token, str(address_id), payment_method)
+        
+        order_id = order_result.get("orderId") if isinstance(order_result, dict) else None
+        status = order_result.get("status") if isinstance(order_result, dict) else None
+        
+        if status == "PENDING_PAYMENT" and payment_method == "UPI":
+            paas_id = order_result.get("paasId")
+            return {
+                "success": True,
+                "order_id": order_id,
+                "status": "PENDING_PAYMENT",
+                "paas_id": paas_id,
+                "message": "UPI order placed. Please approve the payment in your UPI app."
+            }
+        
+        return {
+            "success": True,
+            "order_id": order_id,
+            "status": status,
+            "message": "Order placed successfully"
+        }
+    except Exception as e:
+        logger.exception("Order placement failed")
+        raise HTTPException(status_code=502, detail=f"Order placement failed: {e}") from e
+
 # -------------------------------------------------------------------------
 # Instamart
 # -------------------------------------------------------------------------
@@ -1060,6 +1252,7 @@ async def search_products(
 
 @router.get("/instamart/cart")
 async def get_instamart_cart(
+    request: Request,
     user: User = Depends(require_auth),
     db: Session = Depends(_get_db_session)
 ):
@@ -1068,8 +1261,11 @@ async def get_instamart_cart(
     if not token:
         raise HTTPException(status_code=400, detail="Not connected to Swiggy")
 
+    # Get address_id from query params or header (sent by frontend)
+    address_id = request.query_params.get("address_id") or request.headers.get("X-Address-ID")
+
     try:
-        cart = await swiggy_instamart_mcp.get_cart(token)
+        cart = await swiggy_instamart_mcp.get_cart(token, address_id)
         failure = _mcp_failure_message(cart)
         if failure:
             raise HTTPException(status_code=502, detail=failure)
@@ -1433,3 +1629,373 @@ async def get_dineout_slots(
         return slots
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+# -------------------------------------------------------------------------
+# Swiggy Sync Integration
+# -------------------------------------------------------------------------
+
+@router.get("/swiggy/sync/status", response_model=SwiggySyncStatus)
+async def get_swiggy_sync_status(
+    user: User = Depends(require_auth),
+    db: Session = Depends(_get_db_session),
+):
+    """Get current Swiggy sync status for the user."""
+    sync_service = SwiggySyncService(db)
+    return sync_service.get_sync_status(user.id)
+
+
+@router.post("/swiggy/sync/orders", response_model=SyncOrdersFromSwiggyResult)
+async def sync_orders_from_swiggy(
+    request_body: dict,
+    user: User = Depends(require_auth),
+    db: Session = Depends(_get_db_session),
+):
+    """Manually trigger order sync from Swiggy."""
+    address_id = request_body.get("address_id")
+    max_orders = request_body.get("max_orders", 100)
+    
+    if not address_id:
+        # Try to get default address
+        token = get_user_token(user, db)
+        if not token:
+            raise HTTPException(status_code=400, detail="Not connected to Swiggy")
+        addresses = await swiggy_mcp_client.get_addresses(token)
+        address_id = next(
+            (
+                addr.get("id") or addr.get("addressId") or addr.get("address_id")
+                for addr in addresses
+                if isinstance(addr, dict)
+            ),
+            None,
+        )
+        if not address_id:
+            raise HTTPException(status_code=400, detail="No delivery address found. Please provide address_id.")
+    
+    sync_service = SwiggySyncService(db)
+    return await sync_service.sync_orders_from_swiggy(user.id, str(address_id), max_orders)
+
+
+@router.post("/swiggy/sync/cart-from-mealplan", response_model=CartSyncFromMealPlanResult)
+async def sync_mealplan_to_cart(
+    request: MealPlanCartRequest,
+    user: User = Depends(require_auth),
+    db: Session = Depends(_get_db_session),
+):
+    """Push MealMind meal plan to Swiggy cart."""
+    sync_service = SwiggySyncService(db)
+    return await sync_service.sync_cart_from_meal_plan(user.id, request)
+
+
+@router.get("/swiggy/sync/history")
+async def get_swiggy_sync_history(
+    user: User = Depends(require_auth),
+    db: Session = Depends(_get_db_session),
+    limit: int = 50,
+    offset: int = 0,
+):
+    """Get paginated sync history."""
+    sync_service = SwiggySyncService(db)
+    logs = sync_service.get_sync_history(user.id, limit, offset)
+    
+    return {
+        "logs": [
+            {
+                "id": log.id,
+                "sync_type": log.sync_type,
+                "direction": log.direction,
+                "external_id": log.external_id,
+                "internal_id": log.internal_id,
+                "status": log.status,
+                "items_synced": log.items_synced,
+                "items_failed": log.items_failed,
+                "error_message": log.error_message,
+                "started_at": log.started_at.isoformat() if log.started_at else None,
+                "completed_at": log.completed_at.isoformat() if log.completed_at else None,
+            }
+            for log in logs
+        ],
+        "total": len(logs),
+    }
+
+
+@router.post("/swiggy/sync/disconnect")
+async def disconnect_swiggy(
+    user: User = Depends(require_auth),
+    db: Session = Depends(_get_db_session),
+):
+    """Disconnect Swiggy integration and optionally clear local data."""
+    sync_service = SwiggySyncService(db)
+    sync_service.disconnect_swiggy(user.id)
+    return {"success": True, "message": "Swiggy disconnected successfully"}
+
+
+@router.get("/swiggy/food-mappings")
+async def get_food_mappings(
+    user: User = Depends(require_auth),
+    db: Session = Depends(_get_db_session),
+    limit: int = 100,
+    offset: int = 0,
+    verified_only: bool = False,
+):
+    """Get Swiggy food item mappings for nutrition tracking."""
+    query = select(SwiggyFoodItemMapping).where(SwiggyFoodItemMapping.user_id == user.id)
+    if verified_only:
+        query = query.where(SwiggyFoodItemMapping.verified_by_user == True)
+    query = query.order_by(SwiggyFoodItemMapping.created_at.desc()).limit(limit).offset(offset)
+    
+    mappings = list(db.exec(query))
+    
+    # Include MealMind food info
+    result = []
+    for m in mappings:
+        food = None
+        if m.mealmind_food_id:
+            food = db.get(MealMindFood, m.mealmind_food_id)
+        result.append({
+            "id": m.id,
+            "swiggy_restaurant_id": m.swiggy_restaurant_id,
+            "swiggy_menu_item_id": m.swiggy_menu_item_id,
+            "swiggy_item_name": m.swiggy_item_name,
+            "mealmind_food_id": m.mealmind_food_id,
+            "confidence": m.confidence,
+            "verified_by_user": m.verified_by_user,
+            "food": {
+                "id": food.id,
+                "name": food.name,
+                "calories_per_100g": food.calories_per_100g,
+                "protein_g_per_100g": food.protein_g_per_100g,
+                "carbs_g_per_100g": food.carbs_g_per_100g,
+                "fat_g_per_100g": food.fat_g_per_100g,
+            } if food else None,
+        })
+    
+    return {"mappings": result, "total": len(result)}
+
+
+@router.patch("/swiggy/food-mappings/{mapping_id}")
+async def update_food_mapping(
+    mapping_id: int,
+    request_body: dict,
+    user: User = Depends(require_auth),
+    db: Session = Depends(_get_db_session),
+):
+    """Update a food item mapping (e.g., link to MealMind food, verify)."""
+    mapping = db.get(SwiggyFoodItemMapping, mapping_id)
+    if not mapping or mapping.user_id != user.id:
+        raise HTTPException(status_code=404, detail="Mapping not found")
+    
+    if "mealmind_food_id" in request_body:
+        mapping.mealmind_food_id = request_body["mealmind_food_id"]
+    if "verified_by_user" in request_body:
+        mapping.verified_by_user = request_body["verified_by_user"]
+    if "confidence" in request_body:
+        mapping.confidence = float(request_body["confidence"])
+    
+    mapping.updated_at = datetime.now(timezone.utc)
+    db.add(mapping)
+    db.commit()
+    db.refresh(mapping)
+    
+    return {"success": True, "mapping_id": mapping.id}
+
+
+@router.post("/swiggy/foods")
+async def create_mealmind_food(
+    request_body: dict,
+    user: User = Depends(require_auth),
+    db: Session = Depends(_get_db_session),
+):
+    """Create a new MealMind food entry for nutrition tracking."""
+    required = ["name", "canonical_name"]
+    for field in required:
+        if field not in request_body:
+            raise HTTPException(status_code=422, detail=f"Missing required field: {field}")
+    
+    food = MealMindFood(
+        user_id=user.id,
+        name=request_body["name"],
+        canonical_name=request_body["canonical_name"],
+        calories_per_100g=request_body.get("calories_per_100g"),
+        protein_g_per_100g=request_body.get("protein_g_per_100g"),
+        carbs_g_per_100g=request_body.get("carbs_g_per_100g"),
+        fat_g_per_100g=request_body.get("fat_g_per_100g"),
+        fiber_g_per_100g=request_body.get("fiber_g_per_100g"),
+        sodium_mg_per_100g=request_body.get("sodium_mg_per_100g"),
+        sugar_g_per_100g=request_body.get("sugar_g_per_100g"),
+        serving_size_g=request_body.get("serving_size_g", 100.0),
+        is_veg=request_body.get("is_veg"),
+        source=request_body.get("source", "manual"),
+        tags=request_body.get("tags", ""),
+    )
+    db.add(food)
+    db.commit()
+    db.refresh(food)
+    
+    return {"success": True, "food_id": food.id}
+
+
+@router.get("/swiggy/foods")
+async def list_mealmind_foods(
+    user: User = Depends(require_auth),
+    db: Session = Depends(_get_db_session),
+    limit: int = 100,
+    offset: int = 0,
+    search: str | None = None,
+):
+    """List MealMind foods for nutrition tracking."""
+    query = select(MealMindFood).where(MealMindFood.user_id == user.id)
+    if search:
+        query = query.where(MealMindFood.name.contains(search) | MealMindFood.canonical_name.contains(search))
+    query = query.order_by(MealMindFood.name).limit(limit).offset(offset)
+    
+    foods = list(db.exec(query))
+    return {"foods": foods, "total": len(foods)}
+
+
+@router.post("/nutrition/log")
+async def log_nutrition(
+    request_body: dict,
+    user: User = Depends(require_auth),
+    db: Session = Depends(_get_db_session),
+):
+    """Log consumed nutrition for a meal."""
+    required = ["log_date", "meal_type", "food_id", "quantity_g"]
+    for field in required:
+        if field not in request_body:
+            raise HTTPException(status_code=422, detail=f"Missing required field: {field}")
+    
+    food = db.get(MealMindFood, request_body["food_id"])
+    if not food or food.user_id != user.id:
+        raise HTTPException(status_code=404, detail="Food not found")
+    
+    # Calculate nutrition based on quantity
+    factor = request_body["quantity_g"] / food.serving_size_g
+    
+    log = DailyNutritionLog(
+        user_id=user.id,
+        log_date=datetime.fromisoformat(request_body["log_date"]).date() if isinstance(request_body["log_date"], str) else request_body["log_date"],
+        meal_type=request_body["meal_type"],
+        swiggy_order_id=request_body.get("swiggy_order_id"),
+        food_id=food.id,
+        quantity_g=request_body["quantity_g"],
+        calories=round((food.calories_per_100g or 0) * factor, 1),
+        protein_g=round((food.protein_g_per_100g or 0) * factor, 1),
+        carbs_g=round((food.carbs_g_per_100g or 0) * factor, 1),
+        fat_g=round((food.fat_g_per_100g or 0) * factor, 1),
+        fiber_g=round((food.fiber_g_per_100g or 0) * factor, 1) if food.fiber_g_per_100g else None,
+        sugar_g=round((food.sugar_g_per_100g or 0) * factor, 1) if food.sugar_g_per_100g else None,
+        sodium_mg=round((food.sodium_mg_per_100g or 0) * factor, 1) if food.sodium_mg_per_100g else None,
+        source=request_body.get("source", "manual_entry"),
+        notes=request_body.get("notes", ""),
+    )
+    db.add(log)
+    db.commit()
+    db.refresh(log)
+    
+    return {"success": True, "log_id": log.id}
+
+
+@router.get("/nutrition/daily/{date}")
+async def get_daily_nutrition(
+    date: str,
+    user: User = Depends(require_auth),
+    db: Session = Depends(_get_db_session),
+):
+    """Get daily nutrition summary for a date."""
+    from datetime import date as date_cls
+    log_date = datetime.fromisoformat(date).date() if isinstance(date, str) else date
+    
+    logs = list(db.exec(
+        select(DailyNutritionLog).where(
+            DailyNutritionLog.user_id == user.id,
+            DailyNutritionLog.log_date == log_date,
+        ).order_by(DailyNutritionLog.meal_type)
+    ))
+    
+    # Aggregate by meal type
+    meals = {}
+    totals = {"calories": 0, "protein_g": 0, "carbs_g": 0, "fat_g": 0, "fiber_g": 0, "sugar_g": 0, "sodium_mg": 0}
+    
+    for log in logs:
+        if log.meal_type not in meals:
+            meals[log.meal_type] = {"items": [], "totals": {"calories": 0, "protein_g": 0, "carbs_g": 0, "fat_g": 0}}
+        meals[log.meal_type]["items"].append({
+            "id": log.id,
+            "food_id": log.food_id,
+            "food_name": log.food.name if log.food else "Unknown",
+            "quantity_g": log.quantity_g,
+            "calories": log.calories,
+            "protein_g": log.protein_g,
+            "carbs_g": log.carbs_g,
+            "fat_g": log.fat_g,
+            "fiber_g": log.fiber_g,
+            "source": log.source,
+            "swiggy_order_id": log.swiggy_order_id,
+        })
+        meals[log.meal_type]["totals"]["calories"] += log.calories
+        meals[log.meal_type]["totals"]["protein_g"] += log.protein_g
+        meals[log.meal_type]["totals"]["carbs_g"] += log.carbs_g
+        meals[log.meal_type]["totals"]["fat_g"] += log.fat_g
+        
+        totals["calories"] += log.calories
+        totals["protein_g"] += log.protein_g
+        totals["carbs_g"] += log.carbs_g
+        totals["fat_g"] += log.fat_g
+        totals["fiber_g"] += log.fiber_g or 0
+        totals["sugar_g"] += log.sugar_g or 0
+        totals["sodium_mg"] += log.sodium_mg or 0
+    
+    return {
+        "date": str(log_date),
+        "meals": meals,
+        "totals": totals,
+        "items_count": len(logs),
+    }
+
+
+@router.get("/nutrition/weekly")
+async def get_weekly_nutrition(
+    user: User = Depends(require_auth),
+    db: Session = Depends(_get_db_session),
+    start_date: str | None = None,
+):
+    """Get weekly nutrition summary."""
+    from datetime import date as date_cls, timedelta
+    
+    if start_date:
+        start = datetime.fromisoformat(start_date).date()
+    else:
+        start = date_cls.today() - timedelta(days=6)
+    end = start + timedelta(days=6)
+    
+    logs = list(db.exec(
+        select(DailyNutritionLog).where(
+            DailyNutritionLog.user_id == user.id,
+            DailyNutritionLog.log_date >= start,
+            DailyNutritionLog.log_date <= end,
+        ).order_by(DailyNutritionLog.log_date, DailyNutritionLog.meal_type)
+    ))
+    
+    daily = {}
+    for log in logs:
+        date_str = str(log.log_date)
+        if date_str not in daily:
+            daily[date_str] = {"calories": 0, "protein_g": 0, "carbs_g": 0, "fat_g": 0, "fiber_g": 0, "sugar_g": 0, "sodium_mg": 0, "items": 0}
+        daily[date_str]["calories"] += log.calories
+        daily[date_str]["protein_g"] += log.protein_g
+        daily[date_str]["carbs_g"] += log.carbs_g
+        daily[date_str]["fat_g"] += log.fat_g
+        daily[date_str]["fiber_g"] += log.fiber_g or 0
+        daily[date_str]["sugar_g"] += log.sugar_g or 0
+        daily[date_str]["sodium_mg"] += log.sodium_mg or 0
+        daily[date_str]["items"] += 1
+    
+    # Fill missing days
+    current = start
+    while current <= end:
+        date_str = str(current)
+        if date_str not in daily:
+            daily[date_str] = {"calories": 0, "protein_g": 0, "carbs_g": 0, "fat_g": 0, "fiber_g": 0, "sugar_g": 0, "sodium_mg": 0, "items": 0}
+        current += timedelta(days=1)
+    
+    return {"week_start": str(start), "week_end": str(end), "daily": daily}

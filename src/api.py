@@ -329,12 +329,10 @@ async def swiggy_oauth_callback(
         session.commit()
         
         # Create web session cookie
-        from .api_web import sessions, generate_session_id
+        from .api_web import create_web_session
         
-        session_id = generate_session_id()
-        sessions[session_id] = {"user_id": user.id}
+        session_id = await create_web_session(user.id, session)
         logger.info(f"✅ Created session: {session_id} for user_id: {user.id}")
-        logger.info(f"Active sessions after creation: {list(sessions.keys())}")
         
     finally:
         # 4. Always consume the state
@@ -342,7 +340,8 @@ async def swiggy_oauth_callback(
         session.commit()
 
     # 5. Redirect to React app with session ID in URL (will be stored client-side)
-    callback_url = f"http://localhost:5173/oauth/callback?session_id={session_id}"
+    frontend_url = os.getenv("FRONTEND_URL", "http://localhost:5173")
+    callback_url = f"{frontend_url}/oauth/callback?session_id={session_id}"
     response = HTMLResponse(f"""
     <html>
         <head>

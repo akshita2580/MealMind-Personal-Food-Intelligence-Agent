@@ -15,6 +15,9 @@ from .insight_engine import (
     resolve_insight_period,
 )
 
+from .sync_service import SwiggySyncService
+from .scheduler import SwiggyAutoSyncScheduler, get_scheduler, start_scheduler, stop_scheduler
+
 __all__ = [
     "InsightEngine",
     "Insight",
@@ -23,4 +26,9 @@ __all__ = [
     "build_food_insights_response",
     "generate_food_insights",
     "resolve_insight_period",
+    "SwiggySyncService",
+    "SwiggyAutoSyncScheduler",
+    "get_scheduler",
+    "start_scheduler",
+    "stop_scheduler",
 ]

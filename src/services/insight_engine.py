@@ -26,6 +26,7 @@ It ONLY analyzes existing local order data.
 from __future__ import annotations
 
 import logging
+import os
 from collections import Counter, defaultdict
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
@@ -45,48 +46,56 @@ logger = logging.getLogger(__name__)
 # Minimum Data Thresholds
 # ---------------------------------------------------------------------------
 
+def _get_env_int(name: str, default: int) -> int:
+    try:
+        return int(os.getenv(name, str(default)))
+    except (ValueError, TypeError):
+        return default
+
+
 class DataThresholds:
     """
     Minimum data requirements for generating reliable insights.
     
     These thresholds prevent misleading conclusions from insufficient data.
+    Can be overridden via environment variables.
     """
     
     # Minimum orders required for pattern-based insights
-    MIN_ORDERS_FOR_PATTERNS = 10
+    MIN_ORDERS_FOR_PATTERNS = _get_env_int("INSIGHT_MIN_ORDERS_PATTERNS", 10)
     
     # Minimum orders required for spending trends
-    MIN_ORDERS_FOR_TRENDS = 5
+    MIN_ORDERS_FOR_TRENDS = _get_env_int("INSIGHT_MIN_ORDERS_TRENDS", 5)
     
     # Minimum orders required for restaurant loyalty
-    MIN_ORDERS_FOR_LOYALTY = 8
+    MIN_ORDERS_FOR_LOYALTY = _get_env_int("INSIGHT_MIN_ORDERS_LOYALTY", 8)
     
     # Minimum orders required for cuisine preferences
-    MIN_ORDERS_FOR_CUISINE = 7
+    MIN_ORDERS_FOR_CUISINE = _get_env_int("INSIGHT_MIN_ORDERS_CUISINE", 7)
     
     # Minimum orders required for day-of-week patterns
-    MIN_ORDERS_FOR_DAY_PATTERN = 14  # At least 2 weeks
+    MIN_ORDERS_FOR_DAY_PATTERN = _get_env_int("INSIGHT_MIN_ORDERS_DAY_PATTERN", 14)
     
     # Minimum orders required for hour-of-day patterns
-    MIN_ORDERS_FOR_HOUR_PATTERN = 10
+    MIN_ORDERS_FOR_HOUR_PATTERN = _get_env_int("INSIGHT_MIN_ORDERS_HOUR_PATTERN", 10)
     
     # Minimum orders required for late-night insights
-    MIN_ORDERS_FOR_LATE_NIGHT = 5
+    MIN_ORDERS_FOR_LATE_NIGHT = _get_env_int("INSIGHT_MIN_ORDERS_LATE_NIGHT", 5)
     
     # Minimum orders per restaurant for loyalty insights
-    MIN_ORDERS_PER_RESTAURANT = 3
+    MIN_ORDERS_PER_RESTAURANT = _get_env_int("INSIGHT_MIN_ORDERS_PER_RESTAURANT", 3)
     
     # Minimum orders with items for repeat food insights
-    MIN_ORDERS_FOR_REPEAT_ITEMS = 8
+    MIN_ORDERS_FOR_REPEAT_ITEMS = _get_env_int("INSIGHT_MIN_ORDERS_REPEAT_ITEMS", 8)
     
     # Minimum occurrences of an item to be considered "repeated"
-    MIN_ITEM_OCCURRENCES = 3
+    MIN_ITEM_OCCURRENCES = _get_env_int("INSIGHT_MIN_ITEM_OCCURRENCES", 3)
     
     # Months needed for trend comparison
-    MIN_MONTHS_FOR_COMPARISON = 2
-
+    MIN_MONTHS_FOR_COMPARISON = _get_env_int("INSIGHT_MIN_MONTHS_COMPARISON", 2)
+    
     # Minimum discounted orders before reporting savings patterns
-    MIN_DISCOUNTED_ORDERS = 3
+    MIN_DISCOUNTED_ORDERS = _get_env_int("INSIGHT_MIN_DISCOUNTED_ORDERS", 3)
 
 
 # ---------------------------------------------------------------------------

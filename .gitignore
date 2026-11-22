@@ -123,3 +123,4 @@ config/personal.json
 
 # OAuth DCR registration
 .swiggy_oauth_client.json
+.neon

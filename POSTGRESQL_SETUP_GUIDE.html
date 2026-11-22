@@ -1,0 +1,230 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PostgreSQL Setup Guide - MealMind</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            line-height: 1.6;
+            color: #333;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+            overflow: hidden;
+        }
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 30px;
+            text-align: center;
+        }
+        .header h1 { font-size: 2em; margin-bottom: 10px; }
+        .header p { opacity: 0.9; }
+        .content { padding: 30px; }
+        .step {
+            background: #f8f9fa;
+            border-left: 4px solid #667eea;
+            padding: 20px;
+            margin-bottom: 20px;
+            border-radius: 4px;
+        }
+        .step h2 {
+            color: #667eea;
+            margin-bottom: 15px;
+            font-size: 1.3em;
+        }
+        .step-number {
+            display: inline-block;
+            background: #667eea;
+            color: white;
+            width: 30px;
+            height: 30px;
+            border-radius: 50%;
+            text-align: center;
+            line-height: 30px;
+            margin-right: 10px;
+            font-weight: bold;
+        }
+        .code-box {
+            background: #2d3748;
+            color: #48bb78;
+            padding: 15px;
+            border-radius: 6px;
+            font-family: 'Courier New', monospace;
+            margin: 15px 0;
+            overflow-x: auto;
+        }
+        .btn {
+            display: inline-block;
+            background: #667eea;
+            color: white;
+            padding: 12px 24px;
+            text-decoration: none;
+            border-radius: 6px;
+            margin: 10px 10px 10px 0;
+            transition: transform 0.2s;
+        }
+        .btn:hover { transform: translateY(-2px); background: #5a67d8; }
+        .option {
+            border: 2px solid #e2e8f0;
+            border-radius: 8px;
+            padding: 20px;
+            margin-bottom: 15px;
+            transition: all 0.3s;
+        }
+        .option:hover { border-color: #667eea; box-shadow: 0 4px 12px rgba(102,126,234,0.15); }
+        .option h3 { color: #667eea; margin-bottom: 10px; }
+        .recommended { border-color: #48bb78; background: #f0fff4; }
+        .recommended::before {
+            content: "⭐ RECOMMENDED";
+            background: #48bb78;
+            color: white;
+            padding: 4px 12px;
+            border-radius: 12px;
+            font-size: 0.8em;
+            font-weight: bold;
+            margin-bottom: 10px;
+            display: inline-block;
+        }
+        ul { margin-left: 20px; margin-top: 10px; }
+        li { margin-bottom: 8px; }
+        .success { background: #f0fff4; border-left-color: #48bb78; }
+        .warning { background: #fffaf0; border-left-color: #ed8936; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🐘 PostgreSQL Setup Guide</h1>
+            <p>Choose the best option to set up your production database</p>
+        </div>
+        
+        <div class="content">
+            <div class="step warning">
+                <h2>⚠️ Why PostgreSQL?</h2>
+                <p><strong>SQLite is only for local testing!</strong> For a production-ready app that syncs with actual Swiggy:</p>
+                <ul>
+                    <li>✅ PostgreSQL handles multiple users concurrently</li>
+                    <li>✅ Better performance and reliability</li>
+                    <li>✅ Cloud-ready for deployment</li>
+                    <li>✅ Full ACID transaction support</li>
+                </ul>
+            </div>
+
+            <h2 style="margin: 30px 0 20px 0;">Choose Your Setup Method:</h2>
+
+            <div class="option recommended">
+                <h3>Option 1: Neon (Cloud PostgreSQL)</h3>
+                <p><strong>Best for:</strong> Everyone - Free, fast, no credit card required</p>
+                <p><strong>Setup time:</strong> 3 minutes</p>
+                
+                <div class="step">
+                    <span class="step-number">1</span>
+                    <strong>Create Account</strong>
+                    <br>
+                    <a href="https://neon.tech" target="_blank" class="btn">Open Neon.tech →</a>
+                    <p style="margin-top: 10px;">Click "Sign Up" and use GitHub/Google</p>
+                </div>
+                
+                <div class="step">
+                    <span class="step-number">2</span>
+                    <strong>Create Project</strong>
+                    <br>
+                    <p>• Name it "MealMind"</p>
+                    <p>• Copy the connection string they show you</p>
+                </div>
+                
+                <div class="step">
+                    <span class="step-number">3</span>
+                    <strong>Update .env File</strong>
+                    <br>
+                    <p>Replace <code>DATABASE_URL=data/swiggy.db</code> with:</p>
+                    <div class="code-box">
+DATABASE_URL=postgresql+psycopg://[paste-your-neon-url-here]
+                    </div>
+                    <p><strong>⚠️ Important:</strong> Make sure to add <code>+psycopg</code> after <code>postgresql</code>!</p>
+                </div>
+                
+                <div class="step">
+                    <span class="step-number">4</span>
+                    <strong>Migrate Data</strong>
+                    <br>
+                    <div class="code-box">
+python migrate_sqlite_to_postgres.py
+                    </div>
+                </div>
+                
+                <div class="step">
+                    <span class="step-number">5</span>
+                    <strong>Restart Backend</strong>
+                    <br>
+                    <div class="code-box">
+python -m src.main
+                    </div>
+                </div>
+            </div>
+
+            <div class="option">
+                <h3>Option 2: Supabase (Cloud PostgreSQL)</h3>
+                <p><strong>Best for:</strong> If you want additional features like storage and auth</p>
+                <p><strong>Setup time:</strong> 5 minutes</p>
+                <ol>
+                    <li>Go to <a href="https://supabase.com" target="_blank">supabase.com</a></li>
+                    <li>Create a new project</li>
+                    <li>Settings → Database → Copy "Connection string"</li>
+                    <li>Update .env (add <code>+psycopg</code> to the URL)</li>
+                    <li>Run: <code>python migrate_sqlite_to_postgres.py</code></li>
+                </ol>
+            </div>
+
+            <div class="option">
+                <h3>Option 3: Docker (Local PostgreSQL)</h3>
+                <p><strong>Best for:</strong> Development if you have Docker Desktop</p>
+                <p><strong>Requirements:</strong> Docker Desktop must be running</p>
+                
+                <p>Run these commands:</p>
+                <div class="code-box">
+# Start Docker Desktop first, then:<br>
+python auto_setup_postgres.py
+                </div>
+                <p>This will automatically:</p>
+                <ul>
+                    <li>Create a PostgreSQL container</li>
+                    <li>Update your .env file</li>
+                    <li>Test the connection</li>
+                </ul>
+            </div>
+
+            <div class="step success">
+                <h2>✅ After Setup</h2>
+                <p>Once PostgreSQL is configured:</p>
+                <ol>
+                    <li><strong>Migrate your data:</strong> <code>python migrate_sqlite_to_postgres.py</code></li>
+                    <li><strong>Restart backend:</strong> Stop (Ctrl+C) and start <code>python -m src.main</code></li>
+                    <li><strong>Test your app:</strong> Login and verify all features work</li>
+                </ol>
+            </div>
+
+            <div class="step">
+                <h2>💡 Need Help?</h2>
+                <p>If you run into issues:</p>
+                <ul>
+                    <li>Check that the DATABASE_URL has <code>+psycopg</code> in it</li>
+                    <li>Verify PostgreSQL is accessible (for Docker, check Docker Desktop)</li>
+                    <li>Run: <code>python -c "from src.database import get_engine; get_engine().connect()"</code></li>
+                </ul>
+            </div>
+        </div>
+    </div>
+</body>
+</html>
