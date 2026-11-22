@@ -85,7 +85,6 @@ function selectSwiggyCustomizations(item: MenuItem): { variants?: any[]; variant
   for (const group of item.addons || []) {
     const choices = (group.choices || []).filter(choice => choice && choice.id)
     const minimum = Math.max(0, Number(group.minAddons || 0))
-    const maximum = Math.max(minimum, Number(group.maxAddons || choices.length))
     if (minimum === 0) continue
     // Auto-select minimum required addons (first N available)
     const selected = choices.slice(0, minimum)

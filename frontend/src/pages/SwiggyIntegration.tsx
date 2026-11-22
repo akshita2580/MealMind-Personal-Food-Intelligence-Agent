@@ -89,7 +89,7 @@ const DirectionBadge = ({ direction }: { direction: string }) => {
 
 const SwiggyIntegration: React.FC = () => {
   const navigate = useNavigate();
-  const { user, loading: authLoading } = useAuth();
+  const { isAuthenticated, loading: authLoading } = useAuth();
   
   const [syncStatus, setSyncStatus] = useState<any>(null);
   const [syncHistory, setSyncHistory] = useState<any[]>([]);
@@ -98,7 +98,7 @@ const SwiggyIntegration: React.FC = () => {
   const [showDisconnectDialog, setShowDisconnectDialog] = useState(false);
 
   const fetchAll = useCallback(async () => {
-    if (!user) return;
+    if (!isAuthenticated) return;
     setLoading(true);
     try {
       const [statusRes, historyRes] = await Promise.all([
@@ -112,7 +112,7 @@ const SwiggyIntegration: React.FC = () => {
     } finally {
       setLoading(false);
     }
-  }, [user]);
+  }, [isAuthenticated]);
 
   useEffect(() => {
     fetchAll();
@@ -153,7 +153,7 @@ const SwiggyIntegration: React.FC = () => {
     );
   }
 
-  if (!user) {
+  if (!isAuthenticated) {
     return (
       <div className="text-center py-12">
         <Shield className="h-12 w-12 mx-auto text-muted-foreground mb-4" />
