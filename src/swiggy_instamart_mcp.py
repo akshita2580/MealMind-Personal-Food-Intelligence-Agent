@@ -23,12 +23,14 @@ async def search_products(access_token: str, address_id: str, query: str, offset
     return _extract_result(resp, "search_products")
 
 async def get_cart(access_token: str, address_id: str | None = None) -> dict:
-    """Get the current Instamart cart (the MCP tool takes no arguments).
+    """Get the current Instamart cart.
 
-    `address_id` remains optional for compatibility with the Telegram flow;
-    Swiggy's current get_cart schema does not accept it.
+    The cart is address-specific, so we pass the address_id if available.
     """
-    resp = await _mcp_call(access_token, "get_cart", {})
+    arguments = {}
+    if address_id:
+        arguments["selectedAddressId"] = address_id
+    resp = await _mcp_call(access_token, "get_cart", arguments)
     return _extract_result(resp, "get_cart")
 
 async def update_cart(access_token: str, address_id: str, items: list) -> dict:

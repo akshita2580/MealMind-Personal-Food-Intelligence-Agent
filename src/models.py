@@ -10,9 +10,12 @@ Cookies are intentionally absent from every model — they are only ever
 accepted as a transient function argument and never touch storage.
 """
 
-from datetime import datetime, timezone
+from datetime import datetime, date, timezone
+from typing import Optional
 from pydantic import BaseModel, Field, SecretStr
 from sqlmodel import Field as SMField, Relationship, SQLModel
+import hashlib
+import json
 
 
 # ---------------------------------------------------------------------------
@@ -120,6 +123,18 @@ class OAuthState(SQLModel, table=True):
     code_verifier: str = ""
     expires_at: datetime  # Naive UTC datetime
     created_at: datetime = SMField(default_factory=lambda: datetime.now(timezone.utc).replace(tzinfo=None))
+
+
+class WebSession(SQLModel, table=True):
+    """Persistent web session for React frontend authentication."""
+    
+    __tablename__ = "web_sessions"
+    
+    id: str = SMField(primary_key=True)
+    user_id: int = SMField(foreign_key="users.id", index=True)
+    created_at: datetime = SMField(default_factory=lambda: datetime.now(timezone.utc))
+    expires_at: datetime = SMField(index=True)
+    last_used_at: datetime = SMField(default_factory=lambda: datetime.now(timezone.utc))
 
 
 
@@ -355,3 +370,145 @@ class InsightsListResponse(BaseModel):
     generated_at: str = Field(..., description="Timestamp when insights were generated")
     
     model_config = {"from_attributes": True}
+
+
+# ---------------------------------------------------------------------------
+# Swiggy Synchronization Models
+# ---------------------------------------------------------------------------
+
+class SwiggySyncLog(SQLModel, table=True):
+    """Track sync operations for audit, idempotency, and debugging."""
+    
+    __tablename__ = "swiggy_sync_logs"
+    
+    id: int | None = SMField(default=None, primary_key=True)
+    user_id: int = SMField(foreign_key="users.id", index=True)
+    sync_type: str = SMField(index=True)  # "orders", "cart", "addresses", "mealplan_to_cart"
+    direction: str = SMField(index=True)  # "swiggy_to_mealmind", "mealmind_to_swiggy"
+    external_id: str = SMField(index=True)  # Swiggy order_id, cart_id, etc.
+    internal_id: str | None = SMField(default=None, index=True)  # MealMind Order.id or MealPlan.id
+    status: str = SMField(index=True)  # "success", "failed", "partial", "skipped_duplicate"
+    payload_hash: str = SMField(index=True)  # SHA256 of synced data for change detection
+    error_message: str | None = None
+    items_synced: int = 0
+    items_failed: int = 0
+    started_at: datetime = SMField(default_factory=lambda: datetime.now(timezone.utc))
+    completed_at: datetime | None = None
+    
+    @staticmethod
+    def compute_payload_hash(data: dict) -> str:
+        """Compute deterministic hash for idempotency."""
+        serialized = json.dumps(data, sort_keys=True, default=str)
+        return hashlib.sha256(serialized.encode()).hexdigest()
+
+
+class SwiggyFoodItemMapping(SQLModel, table=True):
+    """Map Swiggy menu items to MealMind food records for nutrition tracking."""
+    
+    __tablename__ = "swiggy_food_item_mappings"
+    
+    id: int | None = SMField(default=None, primary_key=True)
+    user_id: int = SMField(foreign_key="users.id", index=True)
+    swiggy_restaurant_id: str = SMField(index=True)
+    swiggy_menu_item_id: str = SMField(index=True)
+    swiggy_item_name: str = ""
+    mealmind_food_id: int | None = SMField(default=None, foreign_key="mealmind_foods.id", index=True)
+    confidence: float = 0.0  # 0.0-1.0 mapping confidence
+    verified_by_user: bool = False
+    created_at: datetime = SMField(default_factory=lambda: datetime.now(timezone.utc))
+    updated_at: datetime = SMField(default_factory=lambda: datetime.now(timezone.utc))
+    
+    mealmind_food: Optional["MealMindFood"] = Relationship(back_populates="mappings")
+
+
+class MealMindFood(SQLModel, table=True):
+    """MealMind food database with nutrition information."""
+    
+    __tablename__ = "mealmind_foods"
+    
+    id: int | None = SMField(default=None, primary_key=True)
+    user_id: int = SMField(foreign_key="users.id", index=True)
+    name: str = SMField(index=True)
+    canonical_name: str = SMField(index=True)  # Normalized for matching
+    calories_per_100g: float | None = None
+    protein_g_per_100g: float | None = None
+    carbs_g_per_100g: float | None = None
+    fat_g_per_100g: float | None = None
+    fiber_g_per_100g: float | None = None
+    sodium_mg_per_100g: float | None = None
+    sugar_g_per_100g: float | None = None
+    serving_size_g: float = 100.0  # Reference serving size
+    is_veg: bool | None = None
+    source: str = "manual"  # "swiggy", "manual", "usda", "openfoodfacts", "verified"
+    tags: str = ""  # Comma-separated: "high-protein,low-carb,breakfast"
+    created_at: datetime = SMField(default_factory=lambda: datetime.now(timezone.utc))
+    updated_at: datetime = SMField(default_factory=lambda: datetime.now(timezone.utc))
+    
+    mappings: list["SwiggyFoodItemMapping"] = Relationship(back_populates="mealmind_food")
+    nutrition_logs: list["DailyNutritionLog"] = Relationship(back_populates="food")
+
+
+class DailyNutritionLog(SQLModel, table=True):
+    """Track confirmed consumed nutrition per meal."""
+    
+    __tablename__ = "daily_nutrition_logs"
+    
+    id: int | None = SMField(default=None, primary_key=True)
+    user_id: int = SMField(foreign_key="users.id", index=True)
+    log_date: date = SMField(index=True)
+    meal_type: str = SMField(index=True)  # "breakfast", "lunch", "dinner", "snack"
+    swiggy_order_id: str | None = SMField(default=None, index=True)  # Link to Swiggy order if from sync
+    food_id: int = SMField(foreign_key="mealmind_foods.id", index=True)
+    quantity_g: float
+    calories: float
+    protein_g: float
+    carbs_g: float
+    fat_g: float
+    fiber_g: float | None = None
+    sugar_g: float | None = None
+    sodium_mg: float | None = None
+    confirmed_at: datetime = SMField(default_factory=lambda: datetime.now(timezone.utc))
+    source: str = "manual_entry"  # "swiggy_order", "manual_entry", "meal_plan"
+    notes: str = ""
+    
+    food: MealMindFood | None = Relationship(back_populates="nutrition_logs")
+
+
+class SwiggySyncStatus(BaseModel):
+    """API response for sync status."""
+    last_orders_sync: datetime | None = None
+    last_cart_sync: datetime | None = None
+    pending_orders: int = 0
+    failed_syncs_24h: int = 0
+    total_orders_synced: int = 0
+    connection_status: str = "disconnected"  # "connected", "disconnected", "expired"
+    next_auto_sync: datetime | None = None
+
+
+class SyncOrdersFromSwiggyResult(BaseModel):
+    """Result of syncing orders from Swiggy."""
+    new_orders: int = 0
+    updated_orders: int = 0
+    skipped_duplicates: int = 0
+    failed_orders: int = 0
+    new_mappings_created: int = 0
+    sync_log_id: int
+    completed_at: datetime
+
+
+class CartSyncFromMealPlanResult(BaseModel):
+    """Result of pushing meal plan to Swiggy cart."""
+    success: bool
+    cart_url: str | None = None
+    items_added: int = 0
+    items_not_found: list[str] = []
+    mappings_used: int = 0
+    error: str | None = None
+    sync_log_id: int
+
+
+class MealPlanCartRequest(BaseModel):
+    """Request to sync meal plan to Swiggy cart."""
+    meal_plan_id: int
+    address_id: str
+    restaurant_id: str | None = None  # Optional: if meal plan is restaurant-specific

@@ -27,6 +27,22 @@ _DATA_DIR = _PROJECT_ROOT / "data"
 # Engine (lazy singleton)
 # ---------------------------------------------------------------------------
 
+def _get_pool_config() -> dict:
+    """Get connection pool configuration from environment variables."""
+    pool_size = int(os.getenv("DB_POOL_SIZE", "5"))
+    max_overflow = int(os.getenv("DB_MAX_OVERFLOW", "10"))
+    pool_timeout = int(os.getenv("DB_POOL_TIMEOUT", "30"))
+    pool_recycle = int(os.getenv("DB_POOL_RECYCLE", "1800"))  # 30 minutes
+    pool_pre_ping = os.getenv("DB_POOL_PRE_PING", "true").lower() == "true"
+    
+    return {
+        "pool_size": pool_size,
+        "max_overflow": max_overflow,
+        "pool_timeout": pool_timeout,
+        "pool_recycle": pool_recycle,
+        "pool_pre_ping": pool_pre_ping,
+    }
+
 @lru_cache(maxsize=1)
 def get_engine() -> Any:
     """
@@ -59,16 +75,21 @@ def get_engine() -> Any:
     
     if url.startswith("sqlite"):
         connect_args = {"check_same_thread": False}
+        pool_config = {}
     elif url.startswith("postgresql+"):
         # Existing model timestamps are naive UTC. Keep PostgreSQL's session
         # timezone fixed so aware upstream timestamps are stored consistently.
         connect_args = {"options": "-c timezone=UTC"}
+        pool_config = _get_pool_config()
     else:
         connect_args = {}
+        pool_config = {}
+    
     return create_engine(
         url,
         echo=False,
         connect_args=connect_args,
+        **pool_config,
     )
 
 

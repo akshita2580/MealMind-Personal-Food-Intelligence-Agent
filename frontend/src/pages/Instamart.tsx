@@ -3,6 +3,7 @@ import { MapPin, Search, ShoppingCart, Package, Plus, Minus, Trash2, X, Loader2 
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
+import { toast } from 'sonner'
 import { getAddresses, searchProducts, getInstamartCart, updateInstamartCart, clearInstamartCart } from '@/services/api'
 
 interface Address {
@@ -36,10 +37,12 @@ interface Product {
 
   // Variations (Swiggy Instamart structure)
   variations?: Array<{
+    spinId?: string;
     price?: any;
     mrp?: number;
     quantity?: string;
     size?: string;
+    quantityDescription?: string;
   }>;
 
   // Direct price fields (fallback)
@@ -126,8 +129,10 @@ export default function Instamart() {
 
     try {
       setCartLoading(true)
-      const data = await getInstamartCart()
+      const data = await getInstamartCart(selectedAddress.id)
       console.log('Cart response:', data)
+      console.log('Cart items:', data.items)
+      
       if (data.success === false) {
         throw new Error(data.error?.message || 'Swiggy could not load the Instamart cart')
       }
@@ -136,21 +141,42 @@ export default function Instamart() {
       const items: CartItem[] = []
       if (data.items && Array.isArray(data.items)) {
         for (const item of data.items) {
+          console.log('Processing cart item:', item)
+          
           // Extract product info from item
-          const product = item.product || {}
+          const product = item.product || item || {}
+          console.log('Product data:', product)
+          
+          // Extract price - try multiple structures
+          let price = 0
+          if (product.variations && Array.isArray(product.variations) && product.variations.length > 0) {
+            const variation = product.variations[0]
+            console.log('First variation:', variation)
+            price = variation.price?.mrp || variation.price?.offer_price || variation.mrp || variation.price || 0
+          }
+          if (!price) {
+            price = product.price || product.product_price || product.mrp || 0
+          }
+          
+          // Extract name
+          const name = product.displayName || product.name || product.product_name || product.title || 'Product'
+          
+          console.log('Extracted price:', price, 'name:', name)
+          
           items.push({
             spinId: item.spinId,
             quantity: item.quantity,
             product,
-            name: product.displayName || product.name || product.product_name || product.title || 'Product',
+            name,
             brand: product.brand || '',
-            price: product.variations?.[0]?.price?.mrp || product.variations?.[0]?.price?.offer_price || product.variations?.[0]?.mrp || product.variations?.[0]?.price || product.price || product.product_price || product.mrp || 0,
+            price,
             quantity_str: product.variations?.[0]?.quantity || product.variations?.[0]?.size || product.quantity || product.pack_size || product.size || '',
             image_url: product.image_url || product.imageUrl || product.image,
           })
         }
       }
 
+      console.log('Final cart items:', items)
       setCart(items)
       setCartTotal(data.total || items.reduce((sum, item) => sum + (item.price || 0) * item.quantity, 0))
     } catch (err) {
@@ -209,8 +235,9 @@ export default function Instamart() {
   }
 
   const handleAddToCart = (product: Product, productId: string) => {
-    // Get spinId from product
-    const spinId = product.spinId || product.productId || product.id || product.product_id || productId
+    // Get spinId from the first variation (Swiggy expects variation-level spinId, not product-level)
+    // Fallback to product-level IDs if no variations exist
+    const spinId = product.variations?.[0]?.spinId || product.spinId || product.productId || product.id || product.product_id || productId
     updateCartItem(spinId, 1, product)
   }
 
@@ -319,7 +346,8 @@ export default function Instamart() {
   }
 
   const getProductId = (product: Product, idx: number): string => {
-    return product.spinId || product.productId || product.id || product.product_id || `product-${idx}`;
+    // Use variation-level spinId to match what handleAddToCart uses
+    return product.variations?.[0]?.spinId || product.spinId || product.productId || product.id || product.product_id || `product-${idx}`;
   }
 
   const cartItemCount = cart.reduce((sum, item) => sum + item.quantity, 0)
@@ -627,8 +655,9 @@ export default function Instamart() {
                 className="w-full"
                 size="lg"
                 onClick={() => {
-                  // TODO: Navigate to checkout
-                  alert('Checkout functionality to be implemented')
+                  toast.info('Checkout Coming Soon', {
+                    description: 'Cart checkout functionality will be available soon!'
+                  })
                 }}
               >
                 Proceed to Checkout

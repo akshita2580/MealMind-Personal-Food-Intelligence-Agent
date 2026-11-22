@@ -13,6 +13,14 @@ const getSessionId = (): string | null => {
 };
 
 /**
+ * Clear session data on auth failure
+ */
+const clearSession = () => {
+  localStorage.removeItem('session_id');
+  document.cookie = 'session_id=; path=/; max-age=0; SameSite=Lax';
+};
+
+/**
  * Make an authenticated API request
  */
 const fetchAPI = async (endpoint: string, options: RequestInit = {}) => {
@@ -32,6 +40,16 @@ const fetchAPI = async (endpoint: string, options: RequestInit = {}) => {
     headers,
     credentials: 'include',
   });
+  
+  // Handle 401 Unauthorized - clear session and redirect to login
+  if (response.status === 401) {
+    clearSession();
+    // Only redirect if not already on login page
+    if (!window.location.pathname.includes('/login') && !window.location.pathname.includes('/oauth/callback')) {
+      window.location.href = '/login';
+    }
+    throw new Error('Session expired. Please log in again.');
+  }
   
   if (!response.ok) {
     const error = await response.json().catch(() => ({}));
@@ -54,6 +72,7 @@ export const checkAuthStatus = async () => {
 export const logout = async () => {
   const result = await fetchAPI('/auth/logout', { method: 'POST' });
   localStorage.removeItem('session_id');
+  document.cookie = 'session_id=; path=/; max-age=0; SameSite=Lax';
   return result;
 };
 
@@ -239,6 +258,16 @@ export const updateFoodCart = async (
   });
 };
 
+export const clearFoodCart = async (
+  addressId: string,
+  restaurantId: string
+) => {
+  return fetchAPI('/food/cart', {
+    method: 'DELETE',
+    body: JSON.stringify({ address_id: addressId, restaurant_id: restaurantId }),
+  });
+};
+
 export interface FeeBreakdownItem {
   label: string;
   amount: number;
@@ -288,8 +317,9 @@ export const searchProducts = async (addressId: string, query: string, offset: n
   });
 };
 
-export const getInstamartCart = async (): Promise<InstamartCart> => {
-  return fetchAPI('/instamart/cart');
+export const getInstamartCart = async (addressId?: string): Promise<InstamartCart> => {
+  const query = addressId ? `?address_id=${encodeURIComponent(addressId)}` : '';
+  return fetchAPI(`/instamart/cart${query}`);
 };
 
 export const updateInstamartCart = async (addressId: string, items: InstamartCartItem[]): Promise<{ success: boolean; error?: { message?: string }; cart: InstamartCart }> => {
@@ -301,6 +331,18 @@ export const updateInstamartCart = async (addressId: string, items: InstamartCar
 
 export const clearInstamartCart = async (): Promise<{ success: boolean; cart: InstamartCart }> => {
   return fetchAPI('/instamart/cart', { method: 'DELETE' });
+};
+
+export const placeFoodOrder = async (
+  addressId: string,
+  restaurantId: string,
+  items: Array<{ menu_item_id: string; quantity: number; variants?: any[]; variantsV2?: any[]; addons?: any[] }>,
+  paymentMethod: string = "Cash"
+): Promise<{ success: boolean; order_id?: string; message?: string }> => {
+  return fetchAPI('/food/place-order', {
+    method: 'POST',
+    body: JSON.stringify({ address_id: addressId, restaurant_id: restaurantId, items, payment_method: paymentMethod }),
+  });
 };
 
 // ============================================================================
@@ -320,4 +362,175 @@ export const searchVenues = async (
       lng: options?.lng,
     }),
   });
+};
+
+// ============================================================================
+// Swiggy Sync Integration
+// ============================================================================
+
+export interface SwiggySyncStatus {
+  last_orders_sync: string | null;
+  last_cart_sync: string | null;
+  pending_orders: number;
+  failed_syncs_24h: number;
+  total_orders_synced: number;
+  connection_status: 'connected' | 'disconnected' | 'expired';
+  next_auto_sync: string | null;
+}
+
+export const getSwiggySyncStatus = async (): Promise<SwiggySyncStatus> => {
+  return fetchAPI('/swiggy/sync/status');
+};
+
+export interface SyncOrdersResult {
+  new_orders: number;
+  updated_orders: number;
+  skipped_duplicates: number;
+  failed_orders: number;
+  new_mappings_created: number;
+  sync_log_id: number;
+  completed_at: string;
+}
+
+export const syncOrdersFromSwiggy = async (addressId?: string, maxOrders = 100): Promise<SyncOrdersResult> => {
+  return fetchAPI('/swiggy/sync/orders', {
+    method: 'POST',
+    body: JSON.stringify({ address_id: addressId, max_orders: maxOrders }),
+  });
+};
+
+export interface CartSyncResult {
+  success: boolean;
+  cart_url: string | null;
+  items_added: number;
+  items_not_found: string[];
+  mappings_used: number;
+  error: string | null;
+  sync_log_id: number;
+}
+
+export const syncMealPlanToCart = async (mealPlanId: number, addressId: string, restaurantId?: string): Promise<CartSyncResult> => {
+  return fetchAPI('/swiggy/sync/cart-from-mealplan', {
+    method: 'POST',
+    body: JSON.stringify({ meal_plan_id: mealPlanId, address_id: addressId, restaurant_id: restaurantId }),
+  });
+};
+
+export interface SyncLogEntry {
+  id: number;
+  sync_type: string;
+  direction: string;
+  external_id: string;
+  internal_id: string | null;
+  status: string;
+  items_synced: number;
+  items_failed: number;
+  error_message: string | null;
+  started_at: string | null;
+  completed_at: string | null;
+}
+
+export const getSwiggySyncHistory = async (limit = 50, offset = 0): Promise<{ logs: SyncLogEntry[]; total: number }> => {
+  const params = new URLSearchParams({ limit: String(limit), offset: String(offset) });
+  return fetchAPI(`/swiggy/sync/history?${params.toString()}`);
+};
+
+export const disconnectSwiggy = async (): Promise<{ success: boolean; message: string }> => {
+  return fetchAPI('/swiggy/sync/disconnect', { method: 'POST' });
+};
+
+export interface FoodMapping {
+  id: number;
+  swiggy_restaurant_id: string;
+  swiggy_menu_item_id: string;
+  swiggy_item_name: string;
+  mealmind_food_id: number | null;
+  confidence: number;
+  verified_by_user: boolean;
+  food: {
+    id: number;
+    name: string;
+    calories_per_100g: number | null;
+    protein_g_per_100g: number | null;
+    carbs_g_per_100g: number | null;
+    fat_g_per_100g: number | null;
+  } | null;
+}
+
+export const getFoodMappings = async (limit = 100, offset = 0, verifiedOnly = false): Promise<{ mappings: FoodMapping[]; total: number }> => {
+  const params = new URLSearchParams({ limit: String(limit), offset: String(offset), verified_only: String(verifiedOnly) });
+  return fetchAPI(`/swiggy/food-mappings?${params.toString()}`);
+};
+
+export const updateFoodMapping = async (mappingId: number, data: { mealmind_food_id?: number; verified_by_user?: boolean; confidence?: number }) => {
+  return fetchAPI(`/swiggy/food-mappings/${mappingId}`, {
+    method: 'PATCH',
+    body: JSON.stringify(data),
+  });
+};
+
+export interface MealMindFood {
+  id: number;
+  user_id: number;
+  name: string;
+  canonical_name: string;
+  calories_per_100g: number | null;
+  protein_g_per_100g: number | null;
+  carbs_g_per_100g: number | null;
+  fat_g_per_100g: number | null;
+  fiber_g_per_100g: number | null;
+  sodium_mg_per_100g: number | null;
+  sugar_g_per_100g: number | null;
+  serving_size_g: number;
+  is_veg: boolean | null;
+  source: string;
+  tags: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export const createMealMindFood = async (data: Partial<MealMindFood>): Promise<{ success: boolean; food_id: number }> => {
+  return fetchAPI('/swiggy/foods', { method: 'POST', body: JSON.stringify(data) });
+};
+
+export const listMealMindFoods = async (limit = 100, offset = 0, search?: string): Promise<{ foods: MealMindFood[]; total: number }> => {
+  const params = new URLSearchParams({ limit: String(limit), offset: String(offset) });
+  if (search) params.set('search', search);
+  return fetchAPI(`/swiggy/foods?${params.toString()}`);
+};
+
+export interface NutritionLogRequest {
+  log_date: string;
+  meal_type: 'breakfast' | 'lunch' | 'dinner' | 'snack';
+  food_id: number;
+  quantity_g: number;
+  swiggy_order_id?: string;
+  source?: string;
+  notes?: string;
+}
+
+export const logNutrition = async (data: NutritionLogRequest): Promise<{ success: boolean; log_id: number }> => {
+  return fetchAPI('/nutrition/log', { method: 'POST', body: JSON.stringify(data) });
+};
+
+export interface DailyNutritionSummary {
+  date: string;
+  meals: Record<string, { items: any[]; totals: { calories: number; protein_g: number; carbs_g: number; fat_g: number } }>;
+  totals: { calories: number; protein_g: number; carbs_g: number; fat_g: number; fiber_g: number; sugar_g: number; sodium_mg: number };
+  items_count: number;
+}
+
+export const getDailyNutrition = async (date: string): Promise<DailyNutritionSummary> => {
+  return fetchAPI(`/nutrition/daily/${date}`);
+};
+
+export interface WeeklyNutritionSummary {
+  week_start: string;
+  week_end: string;
+  daily: Record<string, { calories: number; protein_g: number; carbs_g: number; fat_g: number; fiber_g: number; sugar_g: number; sodium_mg: number; items: number }>;
+}
+
+export const getWeeklyNutrition = async (startDate?: string): Promise<WeeklyNutritionSummary> => {
+  const params = startDate ? `?start_date=${startDate}` : '';
+  return fetchAPI(`/nutrition/weekly${params}`);
 };

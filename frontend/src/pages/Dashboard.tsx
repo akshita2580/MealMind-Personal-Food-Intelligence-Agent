@@ -1,7 +1,7 @@
 import { Link } from 'react-router-dom'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
-import { UtensilsCrossed, ShoppingCart, Calendar, Lightbulb, LineChart, History } from 'lucide-react'
+import { UtensilsCrossed, ShoppingCart, Calendar, Lightbulb, LineChart, History, Link as LinkIcon } from 'lucide-react'
 
 export default function Dashboard() {
   const features = [
@@ -46,6 +46,13 @@ export default function Dashboard() {
       description: 'View your past orders',
       link: '/orders',
       color: 'text-gray-500'
+    },
+    {
+      icon: LinkIcon,
+      title: 'Swiggy Integration',
+      description: 'Sync orders, manage nutrition, track meals',
+      link: '/swiggy-integration',
+      color: 'text-indigo-500'
     }
   ]
 
