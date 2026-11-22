@@ -57,31 +57,24 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { toast } from 'sonner';
 import {
-  Link,
   RefreshCw,
-  Truck,
   Package,
   History,
   Settings,
   AlertCircle,
-  CheckCircle,
-  XCircle,
   Loader2,
   Database,
   ArrowUpRight,
   ArrowDownLeft,
   Unlink,
-  ChevronDown,
-  ChevronUp,
-  ExternalLink,
   Shield,
   Clock,
   Zap,
   Menu,
-  X,
+  RefreshCcw,
 } from 'lucide-react';
 import { formatDistanceToNow, parseISO, format } from 'date-fns';
-import { getSwiggySyncStatus, syncOrdersFromSwiggy, getSwiggySyncHistory, disconnectSwiggy, getFoodMappings, listMealMindFoods, createMealMindFood } from '@/services/api';
+import { getSwiggySyncStatus, syncOrdersFromSwiggy, getSwiggySyncHistory, disconnectSwiggy } from '@/services/api';
 import { useAuth } from '@/hooks/useAuth';
 
 const STATUS_COLORS = {
@@ -124,26 +117,9 @@ const SwiggyIntegration: React.FC = () => {
   
   const [syncStatus, setSyncStatus] = useState<any>(null);
   const [syncHistory, setSyncHistory] = useState<any[]>([]);
-  const [foodMappings, setFoodMappings] = useState<any[]>([]);
-  const [mealMindFoods, setMealMindFoods] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
-  const [historyLoading, setHistoryLoading] = useState(false);
-  const [mappingsLoading, setMappingsLoading] = useState(false);
-  const [foodsLoading, setFoodsLoading] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const [showDisconnectDialog, setShowDisconnectDialog] = useState(false);
-  const [showFoodDialog, setShowFoodDialog] = useState(false);
-  const [editingMapping, setEditingMapping] = useState<any>(null);
-  const [newFood, setNewFood] = useState({
-    name: '',
-    canonical_name: '',
-    calories_per_100g: '',
-    protein_g_per_100g: '',
-    carbs_g_per_100g: '',
-    fat_g_per_100g: '',
-    is_veg: true,
-    source: 'manual',
-  });
 
   const fetchAll = useCallback(async () => {
     if (!user) return;
@@ -162,47 +138,15 @@ const SwiggyIntegration: React.FC = () => {
     }
   }, [user]);
 
-  const fetchMappings = async () => {
-    setMappingsLoading(true);
-    try {
-      const res = await getFoodMappings(100, 0);
-      setFoodMappings(res.mappings || []);
-    } catch (error: any) {
-      toast.error(`Failed to load mappings: ${error.message}`);
-    } finally {
-      setMappingsLoading(false);
-    }
-  };
-
-  const fetchFoods = async () => {
-    setFoodsLoading(true);
-    try {
-      const res = await listMealMindFoods(100, 0);
-      setMealMindFoods(res.foods || []);
-    } catch (error: any) {
-      toast.error(`Failed to load foods: ${error.message}`);
-    } finally {
-      setFoodsLoading(false);
-    }
-  };
-
   useEffect(() => {
     fetchAll();
   }, [fetchAll]);
-
-  useEffect(() => {
-    if (syncStatus) {
-      fetchMappings();
-      fetchFoods();
-    }
-  }, [syncStatus]);
 
   const handleSyncOrders = async () => {
     if (!syncStatus) return;
     setSyncing(true);
     try {
-      const addressId = prompt('Enter Swiggy address ID (or leave blank to use default):') || undefined;
-      const result = await syncOrdersFromSwiggy(addressId, 100);
+      const result = await syncOrdersFromSwiggy(undefined, 100);
       toast.success(`Sync complete: ${result.new_orders} new, ${result.updated_orders} updated, ${result.skipped_duplicates} skipped`);
       fetchAll();
     } catch (error: any) {
@@ -223,36 +167,7 @@ const SwiggyIntegration: React.FC = () => {
     setShowDisconnectDialog(false);
   };
 
-  const handleCreateFood = async (e: React.FormEvent) => {
-    e.preventDefault();
-    try {
-      const payload = {
-        ...newFood,
-        calories_per_100g: newFood.calories_per_100g ? parseFloat(newFood.calories_per_100g) : null,
-        protein_g_per_100g: newFood.protein_g_per_100g ? parseFloat(newFood.protein_g_per_100g) : null,
-        carbs_g_per_100g: newFood.carbs_g_per_100g ? parseFloat(newFood.carbs_g_per_100g) : null,
-        fat_g_per_100g: newFood.fat_g_per_100g ? parseFloat(newFood.fat_g_per_100g) : null,
-      };
-      await createMealMindFood(payload);
-      toast.success('Food created');
-      setShowFoodDialog(false);
-      setNewFood({ name: '', canonical_name: '', calories_per_100g: '', protein_g_per_100g: '', carbs_g_per_100g: '', fat_g_per_100g: '', is_veg: true, source: 'manual' });
-      fetchFoods();
-    } catch (error: any) {
-      toast.error(`Failed to create food: ${error.message}`);
-    }
-  };
 
-  const handleUpdateMapping = async (mappingId: number, data: any) => {
-    try {
-      await updateFoodMapping(mappingId, data);
-      toast.success('Mapping updated');
-      setEditingMapping(null);
-      fetchMappings();
-    } catch (error: any) {
-      toast.error(`Failed to update mapping: ${error.message}`);
-    }
-  };
 
   if (authLoading) {
     return (
@@ -333,7 +248,7 @@ const SwiggyIntegration: React.FC = () => {
               </div>
               <div className="text-right">
                 <Button onClick={handleSyncOrders} disabled={syncing || syncStatus?.connection_status !== 'connected'}>
-                  <Sync className={`h-4 w-4 mr-2 ${syncing ? 'animate-spin' : ''}`} />
+                  <RefreshCcw className={`h-4 w-4 mr-2 ${syncing ? 'animate-spin' : ''}`} />
                   {syncing ? 'Syncing...' : 'Sync Now'}
                 </Button>
               </div>
@@ -401,10 +316,8 @@ const SwiggyIntegration: React.FC = () => {
 
       {/* Tabs for detailed views */}
       <Tabs defaultValue="history" className="space-y-4">
-        <TabsList className="grid w-full grid-cols-4">
+        <TabsList className="grid w-full grid-cols-2">
           <TabsTrigger value="history">Sync History</TabsTrigger>
-          <TabsTrigger value="mappings">Food Mappings</TabsTrigger>
-          <TabsTrigger value="foods">MealMind Foods</TabsTrigger>
           <TabsTrigger value="nutrition">Nutrition Log</TabsTrigger>
         </TabsList>
 
@@ -418,7 +331,7 @@ const SwiggyIntegration: React.FC = () => {
               </CardDescription>
             </CardHeader>
             <CardContent>
-              {historyLoading ? (
+              {loading ? (
                 <div className="flex justify-center py-8">
                   <Loader2 className="h-8 w-8 animate-spin text-primary" />
                 </div>
@@ -476,150 +389,6 @@ const SwiggyIntegration: React.FC = () => {
           </Card>
         </TabsContent>
 
-        {/* Food Mappings Tab */}
-        <TabsContent value="mappings">
-          <Card>
-            <CardHeader>
-              <CardTitle>Swiggy → MealMind Food Mappings</CardTitle>
-              <CardDescription>
-                Map Swiggy menu items to MealMind nutrition database for automatic tracking
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              {mappingsLoading ? (
-                <div className="flex justify-center py-8">
-                  <Loader2 className="h-8 w-8 animate-spin text-primary" />
-                </div>
-              ) : foodMappings.length === 0 ? (
-                <div className="text-center py-8 text-muted-foreground">
-                  <Package className="h-12 w-12 mx-auto mb-4 opacity-50" />
-                  <p>No food mappings yet. Sync orders to auto-create mappings.</p>
-                </div>
-              ) : (
-                <div className="overflow-x-auto">
-                  <Table>
-                    <TableHeader>
-                      <TableRow>
-                        <TableHead>Swiggy Item</TableHead>
-                        <TableHead>Restaurant</TableHead>
-                        <TableHead>Mapped To</TableHead>
-                        <TableHead>Confidence</TableHead>
-                        <TableHead>Verified</TableHead>
-                        <TableHead>Actions</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {foodMappings.map((mapping) => (
-                        <TableRow key={mapping.id}>
-                          <TableCell className="font-medium">{mapping.swiggy_item_name}</TableCell>
-                          <TableCell className="font-mono text-sm">{mapping.swiggy_restaurant_id}</TableCell>
-                          <TableCell>
-                            {mapping.food ? (
-                              <div>
-                                <p className="font-medium">{mapping.food.name}</p>
-                                <p className="text-xs text-muted-foreground">
-                                  {mapping.food.calories_per_100g} kcal/100g
-                                </p>
-                              </div>
-                            ) : (
-                              <span className="text-muted-foreground">Not mapped</span>
-                            )}
-                          </TableCell>
-                          <TableCell>
-                            <div className="flex items-center gap-2 w-32">
-                              <Progress value={Math.round(mapping.confidence * 100)} className="flex-1 h-2" />
-                              <span className="text-xs text-muted-foreground">{Math.round(mapping.confidence * 100)}%</span>
-                            </div>
-                          </TableCell>
-                          <TableCell>
-                            <Badge variant={mapping.verified_by_user ? 'default' : 'secondary'}>
-                              {mapping.verified_by_user ? '✓ Verified' : 'Auto'}
-                            </Badge>
-                          </TableCell>
-                          <TableCell>
-                            <Button variant="ghost" size="icon" onClick={() => setEditingMapping(mapping)}>
-                              <Settings className="h-4 w-4" />
-                            </Button>
-                          </TableCell>
-                        </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
-                </div>
-              )}
-            </CardContent>
-          </Card>
-        </TabsContent>
-
-        {/* MealMind Foods Tab */}
-        <TabsContent value="foods">
-          <Card>
-            <CardHeader>
-              <div className="flex items-center justify-between">
-                <div>
-                  <CardTitle>MealMind Nutrition Database</CardTitle>
-                  <CardDescription>Food items with nutrition info for tracking</CardDescription>
-                </div>
-                <Button onClick={() => setShowFoodDialog(true)}>
-                  <Menu className="h-4 w-4 mr-2" />
-                  Add Food
-                </Button>
-              </div>
-            </CardHeader>
-            <CardContent>
-              {foodsLoading ? (
-                <div className="flex justify-center py-8">
-                  <Loader2 className="h-8 w-8 animate-spin text-primary" />
-                </div>
-              ) : mealMindFoods.length === 0 ? (
-                <div className="text-center py-8 text-muted-foreground">
-                  <Package className="h-12 w-12 mx-auto mb-4 opacity-50" />
-                  <p>No foods in database yet. Add your first food item.</p>
-                </div>
-              ) : (
-                <div className="overflow-x-auto">
-                  <Table>
-                    <TableHeader>
-                      <TableRow>
-                        <TableHead>Name</TableHead>
-                        <TableHead>Calories</TableHead>
-                        <TableHead>Protein</TableHead>
-                        <TableHead>Carbs</TableHead>
-                        <TableHead>Fat</TableHead>
-                        <TableHead>Source</TableHead>
-                        <TableHead>Veg</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {mealMindFoods.map((food) => (
-                        <TableRow key={food.id}>
-                          <TableCell className="font-medium">{food.name}</TableCell>
-                          <TableCell>{food.calories_per_100g || '—'}</TableCell>
-                          <TableCell>{food.protein_g_per_100g || '—'}g</TableCell>
-                          <TableCell>{food.carbs_g_per_100g || '—'}g</TableCell>
-                          <TableCell>{food.fat_g_per_100g || '—'}g</TableCell>
-                          <TableCell>
-                            <Badge variant="secondary">{food.source}</Badge>
-                          </TableCell>
-                          <TableCell>
-                            {food.is_veg === true ? (
-                              <Badge variant="default" className="bg-green-100 text-green-800">Veg</Badge>
-                            ) : food.is_veg === false ? (
-                              <Badge variant="default" className="bg-red-100 text-red-800">Non-Veg</Badge>
-                            ) : (
-                              <Badge variant="secondary">—</Badge>
-                            )}
-                          </TableCell>
-                        </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
-                </div>
-              )}
-            </CardContent>
-          </Card>
-        </TabsContent>
-
         {/* Nutrition Log Tab - placeholder */}
         <TabsContent value="nutrition">
           <Card>
@@ -641,126 +410,11 @@ const SwiggyIntegration: React.FC = () => {
           </Card>
         </TabsContent>
       </Tabs>
+    </div>
+  );
+};
 
-      {/* Add Food Dialog */}
-      <Dialog open={showFoodDialog} onOpenChange={setShowFoodDialog}>
-        <DialogContent className="max-w-md">
-          <DialogHeader>
-            <DialogTitle>Add New Food</DialogTitle>
-            <DialogDescription>Add a food item to your MealMind nutrition database</DialogDescription>
-          </DialogHeader>
-          <form onSubmit={handleCreateFood} className="space-y-4">
-            <div className="grid grid-cols-2 gap-4">
-              <div className="space-y-2">
-                <Label htmlFor="name">Name *</Label>
-                <Input
-                  id="name"
-                  value={newFood.name}
-                  onChange={(e) => setNewFood({ ...newFood, name: e.target.value })}
-                  placeholder="e.g., Paneer Biryani"
-                  required
-                />
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="canonical_name">Canonical Name *</Label>
-                <Input
-                  id="canonical_name"
-                  value={newFood.canonical_name}
-                  onChange={(e) => setNewFood({ ...newFood, canonical_name: e.target.value })}
-                  placeholder="e.g., paneer biryani"
-                  required
-                />
-              </div>
-            </div>
-            <div className="grid grid-cols-2 gap-4">
-              <div className="space-y-2">
-                <Label htmlFor="calories">Calories/100g</Label>
-                <Input
-                  id="calories"
-                  type="number"
-                  step="0.1"
-                  value={newFood.calories_per_100g}
-                  onChange={(e) => setNewFood({ ...newFood, calories_per_100g: e.target.value })}
-                  placeholder="250"
-                />
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="protein">Protein (g/100g)</Label>
-                <Input
-                  id="protein"
-                  type="number"
-                  step="0.1"
-                  value={newFood.protein_g_per_100g}
-                  onChange={(e) => setNewFood({ ...newFood, protein_g_per_100g: e.target.value })}
-                  placeholder="10"
-                />
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="carbs">Carbs (g/100g)</Label>
-                <Input
-                  id="carbs"
-                  type="number"
-                  step="0.1"
-                  value={newFood.carbs_g_per_100g}
-                  onChange={(e) => setNewFood({ ...newFood, carbs_g_per_100g: e.target.value })}
-                  placeholder="35"
-                />
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="fat">Fat (g/100g)</Label>
-                <Input
-                  id="fat"
-                  type="number"
-                  step="0.1"
-                  value={newFood.fat_per_100g}
-                  onChange={(e) => setNewFood({ ...newFood, fat_per_100g: e.target.value })}
-                  placeholder="8"
-                />
-              </div>
-            </div>
-            <div className="flex items-center gap-4">
-              <Label className="flex items-center gap-2 cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={newFood.is_veg}
-                  onChange={(e) => setNewFood({ ...newFood, is_veg: e.target.checked })}
-                />
-                <span>Vegetarian</span>
-              </Label>
-              <Select value={newFood.source} onValueChange={(v) => setNewFood({ ...newFood, source: v })}>
-                <SelectTrigger className="w-40">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="manual">Manual</SelectItem>
-                  <SelectItem value="swiggy">Swiggy</SelectItem>
-                  <SelectItem value="usda">USDA</SelectItem>
-                  <SelectItem value="openfoodfacts">OpenFoodFacts</SelectItem>
-                  <SelectItem value="verified">Verified</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-            <DialogFooter>
-              <Button type="button" variant="outline" onClick={() => setShowFoodDialog(false)}>
-                Cancel
-              </Button>
-              <Button type="submit" disabled={!newFood.name || !newFood.canonical_name}>
-                Add Food
-              </Button>
-            </DialogFooter>
-          </form>
-        </DialogContent>
-      </Dialog>
-
-      {/* Edit Mapping Dialog */}
-      {editingMapping && (
-        <Dialog open={true} onOpenChange={() => setEditingMapping(null)}>
-          <DialogContent className="max-w-md">
-            <DialogHeader>
-              <DialogTitle>Edit Mapping</DialogTitle>
-              <DialogDescription>{editingMapping.swiggy_item_name}</DialogDescription>
-            </DialogHeader>
-            <div className="space-y-4">
+export default SwiggyIntegration;
               <div className="space-y-2">
                 <Label>Link to MealMind Food</Label>
                 <Select
