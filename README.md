@@ -73,83 +73,91 @@ graph TD
 
 ---
 
-## 🚀 Getting Started
+## 🚀 Quick Start
 
-### 1. Prerequisites
-- **Python 3.10+**
-- **PostgreSQL 14+** (or use SQLite for local development)
+### Prerequisites
+- **Python 3.11+**
+- **PostgreSQL 14+** (Recommended: [Neon.tech](https://neon.tech) - Serverless PostgreSQL)
 - **Node.js 18+** (for React frontend)
+- **Swiggy Account** (for OAuth integration)
 
-### 2. Environment Configuration
-Create a `.env` file in the project root:
+### Installation
 
-```env
-# Database Configuration (PostgreSQL)
-# Example for local PostgreSQL; use your provider's URL in deployment.
-# Format: postgresql+psycopg://user:password@host:port/database
-DATABASE_URL=postgresql+psycopg://postgres:password@localhost:5432/mealmind
-
-# Server Configuration
-PORT=8000
-
-# Swiggy API Configuration
-SWIGGY_API_URL=https://www.swiggy.com/dapi/order/all
-REQUEST_TIMEOUT=30
-
-# OAuth Canonical Callback URI
-# Default: http://127.0.0.1:8000/api/auth/swiggy/callback
-SWIGGY_REDIRECT_URI=http://127.0.0.1:8000/api/auth/swiggy/callback
-
-# Environment (development or production)
-ENVIRONMENT=development
-
-# Encryption Key for securing tokens (Required in production)
-# Generate with: python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
-ENCRYPTION_KEY=
-
-# Official Swiggy MCP servers
-SWIGGY_FOOD_MCP_URL=https://mcp.swiggy.com/food
-SWIGGY_INSTAMART_MCP_URL=https://mcp.swiggy.com/im
-SWIGGY_DINEOUT_MCP_URL=https://mcp.swiggy.com/dineout
-```
-
-For an existing SQLite database, install the requirements and run:
+1. **Clone the repository**
 ```bash
-python scripts/migrate_sqlite_to_postgres.py
-```
-after configuring `DATABASE_URL` to your PostgreSQL URL. The migration copies `data/swiggy.db` into empty PostgreSQL tables and leaves the SQLite file untouched.
-
-### 3. Installation & Boot
-
-```bash
-# Clone the repository
 git clone https://github.com/yourusername/mealmind.git
 cd mealmind
+```
 
-# Create and activate a virtual environment
+2. **Backend Setup**
+```bash
+# Create virtual environment
 python -m venv .venv
-source .venv/bin/activate  # On Windows: .venv\Scripts\activate
 
-# Install Python dependencies
+# Activate (Windows)
+.venv\Scripts\activate
+
+# Activate (Unix/Mac)
+source .venv/bin/activate
+
+# Install dependencies
 pip install -r requirements.txt
+```
 
-# Install frontend dependencies
+3. **Frontend Setup**
+```bash
 cd frontend
 npm install
 cd ..
+```
 
-# Start the backend server
+4. **Environment Configuration**
+
+Copy `.env.example` to `.env` and configure:
+
+```env
+# Database (Use Neon PostgreSQL for production)
+DATABASE_URL=postgresql+psycopg://user:password@host/database
+
+# Backend
+BACKEND_PORT=8000
+FRONTEND_URL=http://localhost:5173
+
+# Swiggy OAuth (Get from Swiggy Builders Club)
+SWIGGY_CLIENT_ID=your_client_id
+SWIGGY_CLIENT_SECRET=your_client_secret
+SWIGGY_REDIRECT_URI=http://localhost:8000/api/auth/callback
+
+# Security (Generate: python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())")
+ENCRYPTION_KEY=your_fernet_key
+```
+
+5. **Database Migration (if migrating from SQLite)**
+```bash
+python scripts/migration/migrate_sqlite_to_postgres.py
+```
+
+### Running the Application
+
+**Start Backend** (Terminal 1):
+```bash
 python -m src.main
+```
+Backend runs on `http://localhost:8000`
 
-# In another terminal, start the frontend dev server
+**Start Frontend** (Terminal 2):
+```bash
 cd frontend
 npm run dev
 ```
+Frontend runs on `http://localhost:5173`
 
-### 4. Connect & Play
+### First Use
 1. Open http://localhost:5173 in your browser
-2. Click **Connect Swiggy** to initiate the secure OAuth flow
-3. Once authenticated, explore the web interface to order food, book tables, or view your personal food insights!
+2. Click **Connect Swiggy** to initiate OAuth
+3. Authorize the application on Swiggy
+4. You'll be redirected back - orders sync automatically!
+5. Explore all features: Food Delivery, Instamart, Dineout, Analytics
 
 ---
 
@@ -164,27 +172,73 @@ Enterprise-grade security is baked into MealMind:
 
 ## 🧪 Testing
 
-MealMind ships with a comprehensive mock testing suite that verifies API endpoints, edge cases, and MCP error handling without hitting production endpoints.
-
+### Backend Tests (Pytest)
 ```bash
-# Install test dependencies
-pip install pytest pytest-asyncio
-
-# Run the test suite
 pytest -v
+```
+
+### Frontend Tests (Vitest)
+```bash
+cd frontend
+npm run test
+```
+
+### Test Coverage
+```bash
+# Backend coverage
+pytest --cov=src --cov-report=html
+
+# Frontend coverage
+cd frontend
+npm run test:coverage
 ```
 
 ---
 
+## 📁 Project Structure
+
+```
+mealmind/
+├── frontend/              # React web application
+│   ├── src/
+│   │   ├── components/   # Reusable UI components
+│   │   ├── pages/        # Page components
+│   │   ├── services/     # API service layer
+│   │   └── lib/          # Utility functions
+│   └── tests/            # Frontend tests
+├── src/                  # Python backend
+│   ├── api.py           # FastAPI endpoints
+│   ├── repository.py    # Database operations
+│   ├── scheduler.py     # Token refresh scheduler
+│   ├── security.py      # Encryption & auth
+│   └── ...
+├── scripts/             # Utility scripts
+│   ├── migration/       # Database migration scripts
+│   └── debug/           # Debug and test scripts
+├── docs/                # Documentation
+│   ├── SETUP.md         # Detailed setup guide
+│   └── ARCHITECTURE.md  # Architecture documentation
+└── tests/               # Backend tests
+```
+
 ## 🤝 Contributing
 
-Contributions are welcome! Whether it's adding a new Swiggy vertical, improving the insights engine, or squashing bugs:
+Contributions are welcome! Follow these steps:
+
 1. Fork the project
-2. Create your Feature Branch (`git checkout -b feature/AmazingFeature`)
-3. Commit your Changes (`git commit -m 'feat: Add some AmazingFeature'`)
-4. Ensure tests pass (`pytest`)
-5. Push to the Branch (`git push origin feature/AmazingFeature`)
-6. Open a Pull Request
+2. Create feature branch: `git checkout -b feature/AmazingFeature`
+3. Make changes and test thoroughly
+4. Commit with conventional commits: `git commit -m 'feat: Add AmazingFeature'`
+5. Push to branch: `git push origin feature/AmazingFeature`
+6. Open a Pull Request (will be squash-merged for clean history)
+
+**Commit Convention:**
+- `feat:` New feature
+- `fix:` Bug fix
+- `docs:` Documentation changes
+- `test:` Adding/updating tests
+- `refactor:` Code refactoring
+- `chore:` Maintenance tasks
 
 ---
 
