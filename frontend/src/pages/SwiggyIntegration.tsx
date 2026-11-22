@@ -14,8 +14,6 @@ import {
 } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { Progress } from '@/components/ui/progress';
-import { Separator } from '@/components/ui/separator';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import {
   Table,
@@ -24,17 +22,7 @@ import {
   TableRow,
   TableHead,
   TableCell,
-  TableCaption,
 } from '@/components/ui/table';
-import {
-  Dialog,
-  DialogTrigger,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  DialogDescription,
-  DialogFooter,
-} from '@/components/ui/dialog';
 import {
   AlertDialog,
   AlertDialogTrigger,
@@ -46,21 +34,10 @@ import {
   AlertDialogCancel,
   AlertDialogAction,
 } from '@/components/ui/alert-dialog';
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select';
-import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
 import { toast } from 'sonner';
 import {
   RefreshCw,
-  Package,
   History,
-  Settings,
   AlertCircle,
   Loader2,
   Database,
@@ -70,7 +47,6 @@ import {
   Shield,
   Clock,
   Zap,
-  Menu,
   RefreshCcw,
 } from 'lucide-react';
 import { formatDistanceToNow, parseISO, format } from 'date-fns';
