@@ -1,6 +1,8 @@
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom'
 import { AuthProvider } from '@/context/AuthContext'
-import { Toaster } from '@/components/ui/toaster'
+import { Toaster } from 'sonner'
+import { ErrorBoundary } from '@/components/ui/error-boundary'
+import { LoadingPage } from '@/components/ui/loading-spinner'
 
 // Layout
 import Layout from '@/components/layout/Layout'
@@ -23,14 +25,7 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const { isAuthenticated, loading } = useAuth()
   
   if (loading) {
-    return (
-      <div className="flex h-screen items-center justify-center">
-        <div className="text-center">
-          <div className="h-32 w-32 animate-spin rounded-full border-b-2 border-primary mx-auto"></div>
-          <p className="mt-4 text-muted-foreground">Loading...</p>
-        </div>
-      </div>
-    )
+    return <LoadingPage message="Verifying authentication..." />
   }
   
   if (!isAuthenticated) {
@@ -42,75 +37,83 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
 
 function App() {
   return (
-    <AuthProvider>
-      <Router>
-        <Routes>
-          <Route path="/login" element={<Login />} />
-          <Route path="/oauth/callback" element={<OAuthCallback />} />
-          
-          <Route path="/" element={<Layout />}>
-            <Route index element={<Navigate to="/dashboard" replace />} />
-            <Route
-              path="dashboard"
-              element={
-                <ProtectedRoute>
-                  <Dashboard />
-                </ProtectedRoute>
-              }
-            />
-            <Route
-              path="food"
-              element={
-                <ProtectedRoute>
-                  <FoodDelivery />
-                </ProtectedRoute>
-              }
-            />
-            <Route
-              path="instamart"
-              element={
-                <ProtectedRoute>
-                  <Instamart />
-                </ProtectedRoute>
-              }
-            />
-            <Route
-              path="dineout"
-              element={
-                <ProtectedRoute>
-                  <Dineout />
-                </ProtectedRoute>
-              }
-            />
-            <Route
-              path="orders"
-              element={
-                <ProtectedRoute>
-                  <OrderHistory />
-                </ProtectedRoute>
-              }
-            />
-            <Route
-              path="insights"
-              element={
-                <ProtectedRoute>
-                  <Insights />
-                </ProtectedRoute>
-              }
-            />
-            <Route
-              path="analytics"
-              element={
-                <ProtectedRoute>
-                  <Analytics />
-                </ProtectedRoute>
-              }
-            />
-          </Route>
-        </Routes>
-        <Toaster />
-      </Router>
-    </AuthProvider>
+    <ErrorBoundary>
+      <AuthProvider>
+        <Router>
+          <Routes>
+            <Route path="/login" element={<Login />} />
+            <Route path="/oauth/callback" element={<OAuthCallback />} />
+            
+            <Route path="/" element={<Layout />}>
+              <Route index element={<Navigate to="/dashboard" replace />} />
+              <Route
+                path="dashboard"
+                element={
+                  <ProtectedRoute>
+                    <Dashboard />
+                  </ProtectedRoute>
+                }
+              />
+              <Route
+                path="food"
+                element={
+                  <ProtectedRoute>
+                    <FoodDelivery />
+                  </ProtectedRoute>
+                }
+              />
+              <Route
+                path="instamart"
+                element={
+                  <ProtectedRoute>
+                    <Instamart />
+                  </ProtectedRoute>
+                }
+              />
+              <Route
+                path="dineout"
+                element={
+                  <ProtectedRoute>
+                    <Dineout />
+                  </ProtectedRoute>
+                }
+              />
+              <Route
+                path="orders"
+                element={
+                  <ProtectedRoute>
+                    <OrderHistory />
+                  </ProtectedRoute>
+                }
+              />
+              <Route
+                path="insights"
+                element={
+                  <ProtectedRoute>
+                    <Insights />
+                  </ProtectedRoute>
+                }
+              />
+              <Route
+                path="analytics"
+                element={
+                  <ProtectedRoute>
+                    <Analytics />
+                  </ProtectedRoute>
+                }
+              />
+            </Route>
+          </Routes>
+          <Toaster 
+            position="bottom-right"
+            toastOptions={{
+              duration: 4000,
+              className: 'swiggy-shadow',
+            }}
+          />
+        </Router>
+      </AuthProvider>
+    </ErrorBoundary>
   )
 }
 
